@@ -1,0 +1,39 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Agent {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  title        String
+  systemPrompt String
+  accent       String   @default("#5b8a9a")
+  createdAt    DateTime @default(now())
+  threads      Thread[]
+}
+
+model Thread {
+  id        String    @id @default(cuid())
+  title     String    @default("New conversation")
+  agentId   String
+  agent     Agent     @relation(fields: [agentId], references: [id])
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  threadId  String
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  toolHints String?
+  createdAt DateTime @default(now())
+}

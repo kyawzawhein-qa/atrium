@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  --ink-deep: #0c1216;
+  --ink-panel: #152028;
+  --ink-line: #2a3a44;
+  --ink-foam: #e8eef2;
+  --ink-mist: #9bb0bc;
+  --coastal: #7eb6b0;
+  --coastal-bright: #9fd0c9;
+}
+
+@theme inline {
+  --color-ink-deep: var(--ink-deep);
+  --color-ink-panel: var(--ink-panel);
+  --color-ink-line: var(--ink-line);
+  --color-ink-foam: var(--ink-foam);
+  --color-ink-mist: var(--ink-mist);
+  --color-coastal: var(--coastal);
+  --color-coastal-bright: var(--coastal-bright);
+  --font-sans: var(--font-source);
+  --font-display: var(--font-display);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--ink-deep);
+  color: var(--ink-foam);
+  font-family: var(--font-source), ui-sans-serif, system-ui, sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-display), ui-serif, Georgia, serif;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3a44 transparent;
+}
