@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ThreadList, type ThreadSummary } from "./ThreadList";
 import { AgentSwitcher, type AgentSummary } from "./AgentSwitcher";
@@ -26,6 +27,7 @@ export function AppShell({
   const [busy, setBusy] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
 
   const loadAgents = useCallback(async () => {
     const res = await fetch("/api/agents");
@@ -42,6 +44,13 @@ export function AppShell({
     setThreads(data.threads);
   }, []);
 
+  const loadSettings = useCallback(async () => {
+    const res = await fetch("/api/settings");
+    if (!res.ok) return;
+    const data = await res.json();
+    setHasKey(Boolean(data.settings?.hasKey));
+  }, []);
+
   const loadThread = useCallback(async (id: string) => {
     const res = await fetch(`/api/threads/${id}`);
     if (!res.ok) {
@@ -56,7 +65,8 @@ export function AppShell({
   useEffect(() => {
     void loadAgents();
     void loadThreads();
-  }, [loadAgents, loadThreads]);
+    void loadSettings();
+  }, [loadAgents, loadThreads, loadSettings]);
 
   useEffect(() => {
     if (activeId) {
@@ -149,7 +159,6 @@ export function AppShell({
     setBusy(true);
     setError(null);
 
-    // Optimistic user bubble
     setDetail((prev) =>
       prev
         ? {
@@ -191,6 +200,15 @@ export function AppShell({
     router.replace("/login");
     router.refresh();
   }
+
+  const agentSubtitle = activeAgent
+    ? [
+        activeAgent.name,
+        activeAgent.modelName || activeAgent.modelId || activeAgent.title,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "Pick an agent to begin";
 
   return (
     <div className="flex h-dvh overflow-hidden bg-ink-deep text-ink-foam">
@@ -236,9 +254,7 @@ export function AppShell({
               {detail?.title || "New conversation"}
             </div>
             <div className="truncate text-[11px] text-ink-mist/70">
-              {activeAgent
-                ? `${activeAgent.name} · ${activeAgent.title}`
-                : "Pick an agent to begin"}
+              {agentSubtitle}
             </div>
           </div>
           <AgentSwitcher
@@ -247,6 +263,12 @@ export function AppShell({
             onChange={(id) => void switchAgent(id)}
             disabled={busy}
           />
+          <Link
+            href="/settings"
+            className="rounded-lg border border-ink-line/80 px-2.5 py-1.5 text-[11px] uppercase tracking-wider text-ink-mist hover:text-ink-foam"
+          >
+            Settings
+          </Link>
           <button
             type="button"
             onClick={() => void logout()}
@@ -255,6 +277,15 @@ export function AppShell({
             Sign out
           </button>
         </header>
+
+        {hasKey === false && (
+          <div className="border-b border-amber-400/20 bg-amber-400/10 px-4 py-2 text-center text-sm text-amber-100">
+            Add OpenRouter key to create agents and chat for real.{" "}
+            <Link href="/settings" className="underline underline-offset-2">
+              Open Settings
+            </Link>
+          </div>
+        )}
 
         <div className="relative flex-1 overflow-y-auto">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(91,138,154,0.12),_transparent_55%),radial-gradient(ellipse_at_bottom_right,_rgba(196,165,116,0.08),_transparent_40%)]" />
@@ -266,7 +297,8 @@ export function AppShell({
                 </div>
                 <p className="mt-3 text-sm leading-relaxed text-ink-mist">
                   Choose an agent above, then start typing—or open a thread from
-                  the left rail. Each specialist keeps their own voice and brief.
+                  the left rail. Each specialist keeps their own voice, model,
+                  and brief.
                 </p>
                 <button
                   type="button"

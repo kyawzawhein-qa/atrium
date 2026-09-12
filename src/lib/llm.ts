@@ -1,182 +1,242 @@
 import { extractToolMentions } from "./tools";
+import { executeFsTool } from "./fs-tools";
+import { getStudioSettings } from "./settings";
+import {
+  OPENROUTER_BASE,
+  openRouterHeaders,
+} from "./openrouter";
 
 export type ChatMessage = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_call_id?: string;
+  name?: string;
 };
 
 export type LlmResult = {
   content: string;
   toolHints: string[];
-  provider: "openai" | "ollama" | "offline";
+  provider: "openrouter" | "offline";
 };
 
-type AgentVoice = {
+export type AgentVoice = {
   name: string;
-  title: string;
+  description: string;
   slug: string;
+  modelId?: string | null;
+  modelName?: string | null;
 };
 
-function buildOfflineReply(
-  agent: AgentVoice,
-  history: ChatMessage[],
-  userText: string
-): string {
-  const lower = userText.toLowerCase();
-  const lastUser = userText.trim().slice(0, 280);
+const FS_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "list_dir",
+      description:
+        "List files and folders in an absolute directory path. Only works for paths the operator granted in Atrium Settings. Runs on the machine hosting this Atrium server.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute directory path on the server machine",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description:
+        "Read a text file at an absolute path. Only works for paths the operator granted in Atrium Settings. Max 64KB. Runs on the machine hosting this Atrium server.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute file path on the server machine",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+];
 
-  if (agent.slug === "senior-developer") {
-    if (/bug|error|crash|fail/.test(lower)) {
-      return [
-        `*(offline demo — no LLM key configured)*`,
-        ``,
-        `Mara here. For “${lastUser}”, I’d start with a narrow reproduction:`,
-        `1. Capture the exact failing input and stack frame.`,
-        `2. Bisect recent changes around that module.`,
-        `3. Add a regression test before the fix lands.`,
-        ``,
-        `If you share a snippet or stack trace, I’ll sketch a concrete patch outline. You can also ask me to \`code_search\` once tools are connected.`,
-      ].join("\n");
-    }
-    if (/arch|design|api|schema/.test(lower)) {
-      return [
-        `*(offline demo — no LLM key configured)*`,
-        ``,
-        `Thinking in boundaries for “${lastUser}”: keep write paths thin, push validation to the edge, and name invariants in the schema—not in tribal knowledge.`,
-        ``,
-        `Proposed shape: request DTO → domain service → persistence adapter. Happy to outline interfaces next.`,
-      ].join("\n");
-    }
-    return [
-      `*(offline demo — no LLM key configured)*`,
-      ``,
-      `Got it — “${lastUser}”. I’d break this into a small vertical slice: contract, happy-path implementation, then failure modes.`,
-      `Tell me the stack and constraints (latency, team size, deadline) and I’ll give a tighter plan.`,
-    ].join("\n");
-  }
-
-  if (agent.slug === "graphic-designer") {
-    if (/logo|brand|color|palette/.test(lower)) {
-      return [
-        `*(offline demo — no LLM key configured)*`,
-        ``,
-        `Theo here. For “${lastUser}”, start with one ink-dark base, one coastal accent, and a single warm highlight—three is enough.`,
-        `Typography: a calm humanist sans for UI, a restrained serif only for display moments.`,
-        `I can draft a mini board on \`sketch_board\` when that tool is wired.`,
-      ].join("\n");
-    }
-    return [
-      `*(offline demo — no LLM key configured)*`,
-      ``,
-      `Looking at “${lastUser}”: prioritize hierarchy first (what eyes hit in 0.5s), then spacing rhythm (8pt), then decoration last.`,
-      `Share the medium (web, print, slide) and I’ll propose a layout grid with two alternatives.`,
-    ].join("\n");
-  }
-
-  // QA Automation
-  if (/test|e2e|cypress|playwright|assert/.test(lower)) {
-    return [
-      `*(offline demo — no LLM key configured)*`,
-      ``,
-      `Imani here. For “${lastUser}”, risk-rank first: auth, money/path-critical flows, then cosmetics.`,
-      `Suggested suite skeleton: smoke → happy path → negative → permission matrix.`,
-      `When \`test_runner\` is connected I can dry-run; for now, I can draft cases as a checklist.`,
-    ].join("\n");
-  }
-
-  const prior = history.filter((m) => m.role === "user").length;
+function buildSystemPrompt(agent: AgentVoice, toolsGranted: boolean): string {
+  const persona = agent.description.trim() || `You are ${agent.name}, an Atrium specialist.`;
+  const tools = toolsGranted
+    ? "The operator has granted filesystem tools (list_dir, read_file) for specific absolute paths. Use them when the user asks about files in those locations. If a path is outside the allowlist, say so and do not invent contents."
+    : "Filesystem tools are not granted. The operator has not added any allowed computer paths. Do not claim you can read or list files.";
   return [
-    `*(offline demo — no LLM key configured)*`,
-    ``,
-    `Noted (${prior} user turn${prior === 1 ? "" : "s"} so far): “${lastUser}”.`,
-    `I’ll treat this as a QA brief—clarify acceptance criteria, then list edge cases and observability hooks.`,
-    `What does “done” look like for this change?`,
+    persona,
+    "",
+    `Your name is ${agent.name}. Stay in this persona. Do not impersonate other agents.`,
+    tools,
   ].join("\n");
 }
 
-async function callOpenAI(
-  messages: ChatMessage[],
-  model?: string
-): Promise<string> {
-  const key = process.env.OPENAI_API_KEY!;
-  const base =
-    process.env.OPENAI_BASE_URL?.replace(/\/$/, "") ||
-    "https://api.openai.com/v1";
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: model || process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages,
-      temperature: 0.7,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`OpenAI-compatible error ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  return data.choices?.[0]?.message?.content?.trim() || "(empty response)";
+function buildOfflineReply(agent: AgentVoice, userText: string): string {
+  const lastUser = userText.trim().slice(0, 280);
+  const hint = agent.description.trim().slice(0, 160);
+  return [
+    `*(offline — OpenRouter API key missing. Add one in Settings to chat for real.)*`,
+    ``,
+    `${agent.name} received: “${lastUser}”.`,
+    hint
+      ? `I would answer in this persona: ${hint}${agent.description.trim().length > 160 ? "…" : ""}`
+      : `I would answer in character once a live model is configured.`,
+    ``,
+    `Open Settings, paste an OpenRouter key, then pick a model on this agent to continue for real.`,
+  ].join("\n");
 }
 
-async function callOllama(messages: ChatMessage[]): Promise<string> {
-  const base = process.env.OLLAMA_BASE_URL!.replace(/\/$/, "");
-  const model = process.env.OLLAMA_MODEL || "llama3.2";
-  const res = await fetch(`${base}/api/chat`, {
+type ToolCall = {
+  id: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+};
+
+type OrChoice = {
+  message?: {
+    content?: string | null;
+    tool_calls?: ToolCall[];
+  };
+  finish_reason?: string;
+};
+
+async function callOpenRouter(opts: {
+  apiKey: string;
+  model: string;
+  messages: unknown[];
+  tools?: typeof FS_TOOLS;
+}): Promise<OrChoice> {
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    messages: opts.messages,
+    temperature: 0.7,
+  };
+  if (opts.tools && opts.tools.length > 0) {
+    body.tools = opts.tools;
+  }
+
+  const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-    }),
+    headers: openRouterHeaders(opts.apiKey),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Ollama error ${res.status}: ${body.slice(0, 200)}`);
+    const text = await res.text();
+    throw new Error(
+      `OpenRouter error ${res.status}: ${text.slice(0, 220)}`
+    );
   }
-  const data = (await res.json()) as { message?: { content?: string } };
-  return data.message?.content?.trim() || "(empty response)";
+  const data = (await res.json()) as { choices?: OrChoice[] };
+  return data.choices?.[0] ?? {};
+}
+
+function parseToolArgs(raw?: string): { path?: string } {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as { path?: unknown };
+    return { path: typeof parsed.path === "string" ? parsed.path : undefined };
+  } catch {
+    return {};
+  }
 }
 
 export async function generateAssistantReply(opts: {
-  agent: AgentVoice & { systemPrompt: string };
+  agent: AgentVoice;
   history: ChatMessage[];
   userText: string;
 }): Promise<LlmResult> {
-  const messages: ChatMessage[] = [
-    { role: "system", content: opts.agent.systemPrompt },
-    ...opts.history.filter((m) => m.role !== "system"),
+  const settings = await getStudioSettings();
+  const apiKey = settings.openrouterApiKey?.trim() || "";
+  const toolsGranted = settings.allowedPaths.length > 0;
+
+  if (!apiKey) {
+    const content = buildOfflineReply(opts.agent, opts.userText);
+    return {
+      content,
+      toolHints: extractToolMentions(content),
+      provider: "offline",
+    };
+  }
+
+  const model = opts.agent.modelId?.trim() || "openai/gpt-4o-mini";
+  const system = buildSystemPrompt(opts.agent, toolsGranted);
+
+  type OrMsg = Record<string, unknown>;
+  const messages: OrMsg[] = [
+    { role: "system", content: system },
+    ...opts.history
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: opts.userText },
   ];
 
-  if (process.env.OPENAI_API_KEY) {
-    const content = await callOpenAI(messages);
-    return {
-      content,
-      toolHints: extractToolMentions(content),
-      provider: "openai",
-    };
+  const usedTools: string[] = [];
+  const maxRounds = toolsGranted ? 4 : 1;
+  let finalContent = "";
+
+  for (let round = 0; round < maxRounds; round++) {
+    const choice = await callOpenRouter({
+      apiKey,
+      model,
+      messages,
+      tools: toolsGranted ? FS_TOOLS : undefined,
+    });
+    const msg = choice.message;
+    const toolCalls = msg?.tool_calls ?? [];
+    const text = (msg?.content || "").trim();
+
+    if (toolCalls.length === 0) {
+      finalContent = text || "(empty response)";
+      break;
+    }
+
+    messages.push({
+      role: "assistant",
+      content: msg?.content ?? "",
+      tool_calls: toolCalls,
+    });
+
+    for (const call of toolCalls) {
+      const name = call.function?.name || "";
+      if (name) usedTools.push(name);
+      const args = parseToolArgs(call.function?.arguments);
+      const result = await executeFsTool(name, args);
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: JSON.stringify(result),
+      });
+    }
+
+    if (round === maxRounds - 1) {
+      const last = await callOpenRouter({
+        apiKey,
+        model,
+        messages,
+      });
+      finalContent = (last.message?.content || text || "(empty response)").trim();
+    }
   }
 
-  if (process.env.OLLAMA_BASE_URL) {
-    const content = await callOllama(messages);
-    return {
-      content,
-      toolHints: extractToolMentions(content),
-      provider: "ollama",
-    };
+  if (!finalContent) {
+    finalContent = "(empty response)";
   }
 
-  const content = buildOfflineReply(opts.agent, opts.history, opts.userText);
+  const hints = Array.from(
+    new Set([...usedTools, ...extractToolMentions(finalContent)])
+  );
+
   return {
-    content,
-    toolHints: extractToolMentions(content),
-    provider: "offline",
+    content: finalContent,
+    toolHints: hints,
+    provider: "openrouter",
   };
 }

@@ -7,22 +7,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Singleton row (id = "singleton") for studio-wide setup.
+model Settings {
+  id               String   @id
+  openrouterApiKey String?
+  /// JSON array of absolute filesystem paths granted to Atrium tools.
+  allowedPaths     String   @default("[]")
+  updatedAt        DateTime @updatedAt
+}
+
 model Agent {
-  id           String   @id @default(cuid())
-  slug         String   @unique
-  name         String
-  title        String
-  systemPrompt String
-  accent       String   @default("#5b8a9a")
-  createdAt    DateTime @default(now())
-  threads      Thread[]
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  /// Optional short role label (seeded specialists). Custom agents may leave empty.
+  title       String   @default("")
+  /// Persona / system prompt for this agent.
+  description String   @default("")
+  /// OpenRouter model id, e.g. "openai/gpt-4o-mini"
+  modelId     String   @default("")
+  /// Optional display name from OpenRouter, e.g. "OpenAI: GPT-4o Mini"
+  modelName   String   @default("")
+  accent      String   @default("#5b8a9a")
+  createdAt   DateTime @default(now())
+  threads     Thread[]
 }
 
 model Thread {
   id        String    @id @default(cuid())
   title     String    @default("New conversation")
   agentId   String
-  agent     Agent     @relation(fields: [agentId], references: [id])
+  agent     Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   messages  Message[]

@@ -47,9 +47,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     reply = await generateAssistantReply({
       agent: {
         name: thread.agent.name,
-        title: thread.agent.title,
+        description: thread.agent.description,
         slug: thread.agent.slug,
-        systemPrompt: thread.agent.systemPrompt,
+        modelId: thread.agent.modelId,
+        modelName: thread.agent.modelName,
       },
       history,
       userText: content,
@@ -60,7 +61,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       data: {
         threadId: thread.id,
         role: "assistant",
-        content: `I hit a provider error: ${message}. Check your LLM env vars or fall back to the offline stub by unsetting OPENAI_API_KEY / OLLAMA_BASE_URL.`,
+        content: `I hit a provider error: ${message}. Check Settings → OpenRouter key and this agent's model.`,
       },
     });
     const refreshed = await prisma.thread.findUnique({

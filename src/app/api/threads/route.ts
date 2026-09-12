@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+const agentSelect = {
+  id: true,
+  name: true,
+  title: true,
+  accent: true,
+  slug: true,
+  modelId: true,
+  modelName: true,
+} as const;
+
 export async function GET() {
   const threads = await prisma.thread.findMany({
     orderBy: { updatedAt: "desc" },
     include: {
-      agent: {
-        select: { id: true, name: true, title: true, accent: true, slug: true },
-      },
+      agent: { select: agentSelect },
       messages: {
         take: 1,
         orderBy: { createdAt: "desc" },
@@ -41,9 +49,7 @@ export async function POST(req: NextRequest) {
       title: body.title?.trim() || `Chat with ${agent.name}`,
     },
     include: {
-      agent: {
-        select: { id: true, name: true, title: true, accent: true, slug: true },
-      },
+      agent: { select: agentSelect },
     },
   });
 

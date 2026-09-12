@@ -22,6 +22,14 @@ async function hasValidSession(req: NextRequest): Promise<boolean> {
   }
 }
 
+function isProtectedPage(pathname: string): boolean {
+  return (
+    pathname.startsWith("/chat") ||
+    pathname.startsWith("/settings") ||
+    pathname.startsWith("/agents")
+  );
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const authed = await hasValidSession(req);
@@ -33,7 +41,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname.startsWith("/chat") || pathname.startsWith("/api/")) {
+  if (isProtectedPage(pathname) || pathname.startsWith("/api/")) {
     if (
       pathname.startsWith("/api/auth/login") ||
       pathname.startsWith("/api/auth/logout")
@@ -54,5 +62,11 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/login", "/chat/:path*", "/api/:path*"],
+  matcher: [
+    "/login",
+    "/chat/:path*",
+    "/settings/:path*",
+    "/agents/:path*",
+    "/api/:path*",
+  ],
 };

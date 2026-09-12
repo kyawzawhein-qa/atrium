@@ -3,12 +3,23 @@ import { prisma } from "@/lib/prisma";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+const agentSelect = {
+  id: true,
+  name: true,
+  title: true,
+  accent: true,
+  slug: true,
+  description: true,
+  modelId: true,
+  modelName: true,
+} as const;
+
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const thread = await prisma.thread.findUnique({
     where: { id },
     include: {
-      agent: true,
+      agent: { select: agentSelect },
       messages: { orderBy: { createdAt: "asc" } },
     },
   });
@@ -44,9 +55,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       where: { id },
       data,
       include: {
-        agent: {
-          select: { id: true, name: true, title: true, accent: true, slug: true },
-        },
+        agent: { select: agentSelect },
       },
     });
     return NextResponse.json({ thread });

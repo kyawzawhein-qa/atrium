@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 export type ThreadSummary = {
   id: string;
   title: string;
@@ -10,6 +12,8 @@ export type ThreadSummary = {
     title: string;
     accent: string;
     slug: string;
+    modelId?: string;
+    modelName?: string;
   };
 };
 
@@ -47,6 +51,27 @@ export function ThreadList({
         </button>
       </div>
 
+      <nav className="flex gap-2 border-b border-ink-line/50 px-3 py-2 text-[11px]">
+        <Link
+          href="/agents"
+          className="rounded-md px-2 py-1 text-ink-mist hover:bg-ink-panel hover:text-ink-foam"
+        >
+          Agents
+        </Link>
+        <Link
+          href="/agents/new"
+          className="rounded-md px-2 py-1 text-ink-mist hover:bg-ink-panel hover:text-ink-foam"
+        >
+          New agent
+        </Link>
+        <Link
+          href="/settings"
+          className="rounded-md px-2 py-1 text-ink-mist hover:bg-ink-panel hover:text-ink-foam"
+        >
+          Settings
+        </Link>
+      </nav>
+
       <div className="flex-1 overflow-y-auto px-2 py-3">
         {threads.length === 0 && (
           <p className="px-2 py-6 text-center text-sm text-ink-mist/70">
@@ -77,7 +102,12 @@ export function ThreadList({
                         {t.title}
                       </div>
                       <div className="truncate text-[11px] text-ink-mist/65">
-                        {t.agent.name} · {t.agent.title}
+                        {t.agent.name}
+                        {t.agent.modelName
+                          ? ` · ${t.agent.modelName}`
+                          : t.agent.title
+                            ? ` · ${t.agent.title}`
+                            : ""}
                       </div>
                     </div>
                   </div>
