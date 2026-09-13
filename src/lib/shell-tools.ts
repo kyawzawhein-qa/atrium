@@ -3,8 +3,9 @@
  *
  * WHY: Commands run on the machine hosting Atrium (Node child_process), never in the
  * browser. cwd must resolve inside the same absolute-path allowlist as fs-tools.
- * Dangerous patterns are hard-rejected; mutating commands require operator approval
- * (in-memory Map, 5 min TTL) so a model cannot silently rm/push/publish.
+ * Dangerous patterns are hard-rejected. Every other command needs operator
+ * approval (in-memory Map, 5 min TTL). cwd allowlist is not enough — argv can
+ * still read /etc/passwd or run a script written via write_file.
  */
 
 import { spawn } from "node:child_process";
@@ -44,10 +45,10 @@ type PendingApproval = {
   command: string;
   cwd: string;
   createdAt: number;
-  /** True when a streaming tool loop is awaiting this decision. */
-  hasWaiter: boolean;
-  resolve: (allowed: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Settles with the final ShellResult (exec, deny, or timeout). */
+  finish: (result: ShellResult) => void;
+  result: Promise<ShellResult>;
 };
 
 const globalForApprovals = globalThis as unknown as {
@@ -76,6 +77,8 @@ const DANGEROUS: RegExp[] = [
   /wget\s+[^|;\n]*\|\s*(ba)?sh\b/i,
   /\bformat\s+[a-z]:/i,
   /\bdiskpart\b/i,
+  /\b(ba)?sh\s+-c\s+['\"][^'"]*rm\s+-rf\s+\//i,
+  /\b(ba)?sh\s+.*rm\s+-rf\s+\//i,
 ];
 
 const MUTATING: RegExp[] = [
@@ -121,7 +124,7 @@ const MUTATING: RegExp[] = [
 const READISH =
   /^(ls|dir|pwd|whoami|hostname|uname|date|echo|cat|head|tail|wc|file|stat|du|df|git\s+(status|log|diff|show|branch|remote|rev-parse)|python3?(?:\s+--version|\s+-V)|node\s+-v|npm\s+(?:-v|--version)|which|where|type|env|printenv|id)\b/i;
 
-function isDangerous(command: string): boolean {
+export function isDangerous(command: string): boolean {
   return DANGEROUS.some((re) => re.test(command.trim()));
 }
 
@@ -143,20 +146,24 @@ function newApprovalId(): string {
 
 function registerApproval(
   command: string,
-  cwd: string,
-  hasWaiter: boolean
-): { approvalId: string; decision: Promise<boolean> } {
+  cwd: string
+): { approvalId: string; result: Promise<ShellResult> } {
   const approvalId = newApprovalId();
-  let settle: (allowed: boolean) => void = () => {};
-  const decision = new Promise<boolean>((resolve) => {
-    settle = resolve;
+  let finish: (result: ShellResult) => void = () => {};
+  const result = new Promise<ShellResult>((resolve) => {
+    finish = resolve;
   });
 
   const timer = setTimeout(() => {
     const entry = approvals().get(approvalId);
     if (entry) {
       approvals().delete(approvalId);
-      entry.resolve(false);
+      entry.finish({
+        ok: false,
+        error: "Approval timed out.",
+        code: "denied",
+        approvalId,
+      });
     }
   }, APPROVAL_TTL_MS);
 
@@ -164,28 +171,27 @@ function registerApproval(
     command,
     cwd,
     createdAt: Date.now(),
-    hasWaiter,
-    resolve: (allowed) => {
+    timer,
+    finish: (r) => {
       clearTimeout(timer);
       approvals().delete(approvalId);
-      settle(allowed);
+      finish(r);
     },
-    timer,
+    result,
   });
 
-  return { approvalId, decision };
+  return { approvalId, result };
 }
 
 /**
- * Operator confirm/deny. If a streaming loop is waiting, wake it (it will exec).
- * Otherwise execute immediately on allow so JSON/fallback chips still work.
+ * Operator confirm/deny. Approve always executes here (once) so a dead SSE
+ * waiter cannot report success with no command, and two clicks cannot double-run.
  */
 export async function resolveShellApproval(
   approvalId: string,
   allow: boolean
 ): Promise<
   | { ok: true; allowed: false }
-  | { ok: true; allowed: true; continued: true }
   | { ok: true; allowed: true; continued: false; result: ShellResult }
   | { ok: false; error: string }
 > {
@@ -195,20 +201,21 @@ export async function resolveShellApproval(
   }
 
   if (!allow) {
-    entry.resolve(false);
+    const denied: ShellResult = {
+      ok: false,
+      error: "Operator denied this shell command.",
+      code: "denied",
+      approvalId,
+    };
+    entry.finish(denied);
     return { ok: true, allowed: false };
   }
 
-  if (entry.hasWaiter) {
-    entry.resolve(true);
-    return { ok: true, allowed: true, continued: true };
-  }
-
-  const { command, cwd, resolve, timer } = entry;
-  clearTimeout(timer);
+  const { command, cwd, finish } = entry;
   approvals().delete(approvalId);
-  resolve(true);
+  clearTimeout(entry.timer);
   const result = await execCommand(command, cwd);
+  finish(result);
   return { ok: true, allowed: true, continued: false, result };
 }
 
@@ -320,7 +327,7 @@ async function prepareShell(
     return { ok: false, error: "cwd is required.", code: "invalid" };
   }
 
-  const check = resolveIfAllowed(cwdRaw, settings.allowedPaths);
+  const check = await resolveIfAllowed(cwdRaw, settings.allowedPaths);
   if (!check.ok) {
     return {
       ok: false,
@@ -342,17 +349,17 @@ async function prepareShell(
 
 /**
  * Run a shell command inside an allowlisted cwd.
- * Mutating commands without prior approval return needs_approval immediately.
+ * Every command without prior approval returns needs_approval.
  */
 export async function runShellTool(args: RunShellArgs): Promise<ShellResult> {
   const prepared = await prepareShell(args);
   if (!prepared.ok) return prepared;
 
-  if (isMutating(prepared.command) && !args.approved) {
-    const { approvalId } = registerApproval(prepared.command, prepared.cwd, false);
+  if (!args.approved) {
+    const { approvalId } = registerApproval(prepared.command, prepared.cwd);
     return {
       ok: false,
-      error: "Mutating shell command needs operator approval.",
+      error: "Shell commands need operator approval.",
       code: "needs_approval",
       approvalId,
     };
@@ -377,27 +384,17 @@ export async function runShellWithApprovalGate(
   const prepared = await prepareShell(args);
   if (!prepared.ok) return prepared;
 
-  if (isMutating(prepared.command) && !args.approved) {
-    const { approvalId, decision } = registerApproval(
+  if (!args.approved) {
+    const { approvalId, result } = registerApproval(
       prepared.command,
-      prepared.cwd,
-      true
+      prepared.cwd
     );
     onNeedsApproval({
       approvalId,
       command: prepared.command,
       cwd: prepared.cwd,
     });
-    const allowed = await decision;
-    if (!allowed) {
-      return {
-        ok: false,
-        error: "Operator denied this shell command.",
-        code: "denied",
-        approvalId,
-      };
-    }
-    return execCommand(prepared.command, prepared.cwd);
+    return result;
   }
 
   return execCommand(prepared.command, prepared.cwd);
@@ -409,7 +406,7 @@ export function shellToolDefinition() {
     function: {
       name: "run_shell",
       description:
-        "Run a shell command on the machine hosting Atrium. cwd must be an absolute path inside the operator allowlist. Read-ish commands run immediately; mutating commands require operator approval. Dangerous commands are always rejected.",
+        "Run a shell command on the machine hosting Atrium. cwd must be an absolute path inside the operator allowlist. Every command requires operator approval. Dangerous commands are always rejected.",
       parameters: {
         type: "object",
         properties: {

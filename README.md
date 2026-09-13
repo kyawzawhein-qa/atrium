@@ -20,14 +20,14 @@ Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https:/
 - **Your key, your models** — Paste an OpenRouter API key in Settings. Each agent chooses its own model. The key never lives in `.env` or git.
 - **Agents you own** — Name, description (system prompt), and model are first-class. Seeded demos are ordinary, deletable rows.
 - **Bounded computer access** — An explicit path allowlist gates `list_dir`, `read_file`, `write_file`, `edit_file`, and optional `run_shell` on the server. Empty allowlist means tools are not granted.
-- **No login** — Open the studio and chat. Streaming replies via SSE; mutating shell commands ask for Approve / Deny.
+- **No login** — Open the studio and chat. Streaming replies via SSE; every shell command asks for Approve / Deny.
 
 ## Features
 
 - **Custom agents** with per-agent OpenRouter models
 - **Streaming chat** (SSE: tokens + tool chips as they arrive)
 - **Path allowlist** for absolute paths (`list_dir`, `read_file`, `write_file`, `edit_file`)
-- **Optional shell** — Settings toggle “Allow shell in granted folders”; mutating commands need approval
+- **Optional shell** — Settings toggle “Allow shell in granted folders”; every command needs approval
 - **Local SQLite** via Prisma (settings, agents, threads, messages)
 
 ## Quick start
@@ -54,12 +54,12 @@ Open [http://localhost:3000](http://localhost:3000) — redirects to `/chat`. No
 2. Create an agent (or edit a seeded one): name, description, model.
 3. Start a chat. Completions stream from that agent’s `modelId` via `https://openrouter.ai/api/v1`.
 4. Optionally grant absolute folders under the path allowlist.
-5. Optionally enable **Allow shell in granted folders** for `run_shell` (mutating commands show Approve / Deny).
+5. Optionally enable **Allow shell in granted folders** for `run_shell` (every command shows Approve / Deny).
 
 ## Security notes
 
 - **Allowlist** — Tools run on the machine hosting Atrium. Only absolute paths are accepted. Traversal outside granted roots is rejected. An empty allowlist returns “not granted.”
-- **Shell** — Off by default. Dangerous patterns are hard-rejected. Mutating commands wait for operator approval (5-minute TTL).
+- **Shell** — Off by default. Dangerous patterns are hard-rejected. Every command waits for operator approval (5-minute TTL).
 - **Key storage** — The OpenRouter key lives in SQLite, not environment files. Never commit `.env`, `*.db`, or keys. See [SECURITY.md](SECURITY.md).
 
 ## Architecture

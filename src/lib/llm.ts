@@ -191,7 +191,7 @@ function buildSystemPrompt(
       "These tools actually create and change files. You are not a read-only assistant.",
       "When the user asks to create, write, save, edit, or update a file, you MUST call write_file or edit_file. Do not refuse. Do not say your capabilities are limited to reading and listing. Do not paste a plan instead of calling the tool.",
       shellGranted
-        ? "run_shell executes on the server inside granted folders. Prefer filesystem tools for file edits. Mutating shell commands need operator approval."
+        ? "run_shell executes on the server inside granted folders. Prefer filesystem tools for file edits. Every shell command needs operator approval."
         : "",
       "Use absolute paths only. If a path is outside the allowlist, report the tool error honestly.",
       "After a successful write or edit, confirm the path in one short sentence.",

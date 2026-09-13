@@ -64,10 +64,22 @@ function isInsideRoot(resolved: string, root: string): boolean {
   return a === b || a.startsWith(b + path.sep);
 }
 
-export function resolveIfAllowed(
+async function realpathExisting(p: string): Promise<string | null> {
+  try {
+    return await fs.realpath(/*turbopackIgnore: true*/ p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a path and refuse anything whose realpath is outside a granted root.
+ * WHY: path.resolve alone follows ".." in the string but not symlink hops.
+ */
+export async function resolveIfAllowed(
   target: string,
   allowed: string[]
-): { ok: true; path: string } | ToolFailure {
+): Promise<{ ok: true; path: string } | ToolFailure> {
   const raw = target?.trim() ?? "";
   if (!raw || raw.includes("\0")) {
     return { ok: false, error: "Invalid path.", code: "invalid" };
@@ -89,8 +101,21 @@ export function resolveIfAllowed(
   }
 
   const resolved = path.resolve(/*turbopackIgnore: true*/ raw);
-  const allowedResolved = allowed.map((a) => path.resolve(/*turbopackIgnore: true*/ a));
-  const inside = allowedResolved.some((root) => isInsideRoot(resolved, root));
+  let candidate = await realpathExisting(resolved);
+  if (!candidate) {
+    const parentReal = await realpathExisting(path.dirname(resolved));
+    if (!parentReal) {
+      return { ok: false, error: "Path is not found on the server machine.", code: "not_found" };
+    }
+    candidate = path.join(parentReal, path.basename(resolved));
+  }
+
+  const allowedReal: string[] = [];
+  for (const a of allowed) {
+    const root = path.resolve(/*turbopackIgnore: true*/ a);
+    allowedReal.push((await realpathExisting(root)) ?? root);
+  }
+  const inside = allowedReal.some((root) => isInsideRoot(candidate, root));
   if (!inside) {
     return {
       ok: false,
@@ -98,12 +123,12 @@ export function resolveIfAllowed(
       code: "outside_allowlist",
     };
   }
-  return { ok: true, path: resolved };
+  return { ok: true, path: candidate };
 }
 
 export async function listDir(target: string): Promise<ListDirSuccess | ToolFailure> {
   const settings = await getStudioSettings();
-  const check = resolveIfAllowed(target, settings.allowedPaths);
+  const check = await resolveIfAllowed(target, settings.allowedPaths);
   if (!check.ok) return check;
 
   try {
@@ -139,7 +164,7 @@ function isProbablyBinary(buf: Buffer): boolean {
 
 export async function readFileTool(target: string): Promise<ReadFileSuccess | ToolFailure> {
   const settings = await getStudioSettings();
-  const check = resolveIfAllowed(target, settings.allowedPaths);
+  const check = await resolveIfAllowed(target, settings.allowedPaths);
   if (!check.ok) return check;
 
   try {
@@ -147,21 +172,15 @@ export async function readFileTool(target: string): Promise<ReadFileSuccess | To
     if (!stat.isFile()) {
       return { ok: false, error: "Path is not a file.", code: "invalid" };
     }
-    if (stat.size > MAX_READ_BYTES) {
-      const buf = await fs.readFile(/*turbopackIgnore: true*/ check.path);
-      const slice = buf.subarray(0, MAX_READ_BYTES);
-      if (isProbablyBinary(slice)) {
-        return { ok: false, error: "Refusing to read a binary file.", code: "binary" };
-      }
-      return {
-        ok: true,
-        path: check.path,
-        content: slice.toString("utf8"),
-        bytes: slice.length,
-        truncated: true,
-      };
+    const toRead = Math.min(Number(stat.size), MAX_READ_BYTES);
+    const handle = await fs.open(/*turbopackIgnore: true*/ check.path, "r");
+    let buf = Buffer.alloc(toRead);
+    try {
+      const { bytesRead } = await handle.read(buf, 0, toRead, 0);
+      buf = buf.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
     }
-    const buf = await fs.readFile(/*turbopackIgnore: true*/ check.path);
     if (isProbablyBinary(buf)) {
       return { ok: false, error: "Refusing to read a binary file.", code: "binary" };
     }
@@ -170,7 +189,7 @@ export async function readFileTool(target: string): Promise<ReadFileSuccess | To
       path: check.path,
       content: buf.toString("utf8"),
       bytes: buf.length,
-      truncated: false,
+      truncated: stat.size > MAX_READ_BYTES,
     };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -186,7 +205,7 @@ export async function writeFileTool(
   content: string
 ): Promise<WriteFileSuccess | ToolFailure> {
   const settings = await getStudioSettings();
-  const check = resolveIfAllowed(target, settings.allowedPaths);
+  const check = await resolveIfAllowed(target, settings.allowedPaths);
   if (!check.ok) return check;
   if (typeof content !== "string") {
     return { ok: false, error: "Content must be a string.", code: "invalid" };
@@ -201,7 +220,7 @@ export async function writeFileTool(
   }
 
   const parent = path.dirname(check.path);
-  const parentCheck = resolveIfAllowed(parent, settings.allowedPaths);
+  const parentCheck = await resolveIfAllowed(parent, settings.allowedPaths);
   if (!parentCheck.ok) return parentCheck;
 
   try {

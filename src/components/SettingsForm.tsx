@@ -204,7 +204,7 @@ export function SettingsForm() {
           <p className="mt-2 text-sm leading-relaxed text-ink-mist/80">
             When enabled, agents may call <code className="text-coastal">run_shell</code>{" "}
             with cwd inside a granted folder. Read-ish commands run immediately;
-            mutating commands (rm, git push, npm publish, …) ask for Approve /
+            every command asks for Approve /
             Deny in the chat. Dangerous patterns are always rejected. Requires a
             non-empty allowlist.
           </p>
