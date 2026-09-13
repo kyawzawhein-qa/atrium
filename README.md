@@ -32,14 +32,42 @@ Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https:/
 
 ## Quick start
 
+### One command (recommended)
+
+Requires [Node.js 20+](https://nodejs.org/). Creates a local `atrium` folder in the current directory, installs dependencies, copies `.env.example` to `.env` (no secrets), runs database setup, and starts the dev server on **localhost only**.
+
+**macOS / Linux (bash, zsh, fish):**
+
 ```bash
+npx -y github:kyawzawhein-qa/atrium create-atrium
+```
+
+**Windows (PowerShell):**
+
+```powershell
+npx -y github:kyawzawhein-qa/atrium create-atrium
+```
+
+Use a custom folder name:
+
+```bash
+npx -y github:kyawzawhein-qa/atrium create-atrium my-studio
+```
+
+Open [http://localhost:3000](http://localhost:3000) — redirects to `/chat`. No password.
+
+> **Note:** The first `npx` run downloads the repo once so the bootstrap command is available. Your actual studio is created in the folder above with its own `node_modules` and SQLite database. For a lighter one-liner later, publish the `create-atrium` subpackage to npm (for example `create-atrium` or `@kyawzawhein/create-atrium`) so users can run `npm create atrium@latest` — that publish step is manual and not done from CI.
+
+### Manual setup (from a clone)
+
+```bash
+git clone https://github.com/kyawzawhein-qa/atrium.git
+cd atrium
 npm install
 cp .env.example .env
 npm run db:setup
 npm run dev
 ```
-
-Open [http://localhost:3000](http://localhost:3000) — redirects to `/chat`. No password.
 
 | Variable | Purpose |
 | --- | --- |
