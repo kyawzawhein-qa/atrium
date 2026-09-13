@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/hero.svg" alt="Atrium — self-hosted multi-agent studio" width="100%" />
+  <img src="docs/github-social.png" alt="Atrium — self-hosted multi-agent studio" width="100%" />
 </p>
 
 Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https://github.com/kyawzawhein-qa). Define specialist agents, pick an OpenRouter model per agent, and optionally grant absolute filesystem paths so agents can list, read, write, and edit files — all on your machine, with a local SQLite database.

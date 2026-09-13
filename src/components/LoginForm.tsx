@@ -40,10 +40,17 @@ export function LoginForm() {
       onSubmit={onSubmit}
       className="w-full max-w-sm space-y-5 rounded-3xl border border-ink-line/70 bg-ink-panel/70 p-8 shadow-[0_30px_80px_rgba(0,0,0,0.35)] backdrop-blur"
     >
-      <div className="space-y-2">
-        <div className="font-display text-2xl tracking-[0.12em] text-ink-foam">
-          ATRIUM
-        </div>
+      <div className="space-y-3">
+        <img
+          src="/brand/logo-mark.svg"
+          alt=""
+          className="h-14 w-14"
+        />
+        <img
+          src="/brand/logo-wordmark.svg"
+          alt="Atrium"
+          className="h-8 w-auto"
+        />
         <p className="text-sm leading-relaxed text-ink-mist">
           Kyaw Zaw Hein&apos;s multi-agent desk. Enter the studio password to
           continue.

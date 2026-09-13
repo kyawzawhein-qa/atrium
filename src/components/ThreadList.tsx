@@ -33,14 +33,16 @@ export function ThreadList({
   return (
     <aside className="flex h-full w-full flex-col border-r border-ink-line/60 bg-ink-deep/80">
       <div className="flex items-center justify-between gap-2 border-b border-ink-line/60 px-4 py-4">
-        <div>
-          <div className="font-display text-lg tracking-[0.08em] text-ink-foam">
-            ATRIUM
-          </div>
-          <div className="text-[11px] uppercase tracking-[0.22em] text-ink-mist/70">
+        <Link href="/chat" className="min-w-0">
+          <img
+            src="/brand/logo-wordmark.svg"
+            alt="Atrium"
+            className="h-7 w-auto"
+          />
+          <div className="mt-1 text-[11px] uppercase tracking-[0.22em] text-ink-mist/70">
             Multi-agent desk
           </div>
-        </div>
+        </Link>
         <button
           type="button"
           onClick={onCreate}

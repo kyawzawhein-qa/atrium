@@ -22,7 +22,7 @@ export const metadata: Metadata = {
       "Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.",
     images: [{ url: "/og.png", width: 1280, height: 640 }],
   },
-  icons: { icon: "/favicon.svg" },
+  icons: { icon: "/favicon.svg", apple: "/brand/logo-mark-512.png" },
   twitter: {
     card: "summary_large_image",
     title: "Atrium",
