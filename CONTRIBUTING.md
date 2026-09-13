@@ -42,11 +42,11 @@ Atrium loads drop-in extensions from the [`plugins/`](plugins/) folder. Each plu
 
 See [`plugins/README.md`](plugins/README.md) for the full hook contract. The shipped [`plugins/hello-world/`](plugins/hello-world/) example is a minimal PR template: copy it, rename, and open a PR.
 
-Core wiring lives in `src/lib/plugins/` (`loader.ts`, `registry.ts`, `init.ts`) and hooks into `src/lib/llm.ts` plus `src/lib/tools.ts`.
+Core wiring lives in `src/lib/plugins/` (`loader.ts`, `registry.ts`, `init.ts`) and hooks into `src/lib/llm.ts` plus `src/lib/tools.ts`. Plugin **tools** require a non-empty path allowlist (same gate as filesystem tools). Plugins are trusted local code only — no remote install.
 
 ## Launch demo
 
-To verify tool chips locally, follow [`docs/DEMO.md`](docs/DEMO.md) (~45 seconds after setup). The in-app **Run 45s demo** button grants `demo-workspace/`, enables shell, and walks through `write_file` plus shell Approve / Deny.
+To verify tool chips locally, follow [`docs/DEMO.md`](docs/DEMO.md) (~45 seconds after setup). The in-app **Run 45s demo** button calls `POST /api/demo/setup`, which is bound to **localhost + same-origin operator session** by default (see `src/lib/demo-auth.ts`). `GET /api/demo/setup` is read-only.
 
 ## Code style
 

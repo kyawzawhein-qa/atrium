@@ -4,7 +4,14 @@ import { pathToFileURL } from "node:url";
 import type { AtriumPlugin, AtriumPluginManifest, LoadedPlugin } from "./types";
 
 const MANIFEST = "plugin.json";
-const MODULE_CANDIDATES = ["index.mjs", "index.js", "index.ts"] as const;
+const DEV_MODULE_CANDIDATES = ["index.mjs", "index.js", "index.ts"] as const;
+const PROD_MODULE_CANDIDATES = ["index.mjs"] as const;
+
+function moduleCandidates(): readonly string[] {
+  return process.env.NODE_ENV === "production"
+    ? PROD_MODULE_CANDIDATES
+    : DEV_MODULE_CANDIDATES;
+}
 
 function pluginsRoot(customRoot?: string): string {
   return customRoot ?? path.join(process.cwd(), "plugins");
@@ -43,7 +50,7 @@ function parseManifest(raw: string, sourceDir: string): AtriumPluginManifest {
 }
 
 async function loadModuleTools(sourceDir: string): Promise<AtriumPlugin["tools"]> {
-  for (const file of MODULE_CANDIDATES) {
+  for (const file of moduleCandidates()) {
     const modPath = path.join(sourceDir, file);
     try {
       const info = await stat(modPath);

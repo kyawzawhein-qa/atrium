@@ -102,7 +102,10 @@ export function AppShell({
     setDemoBusy(true);
     setError(null);
     try {
-      const setupRes = await fetch("/api/demo/setup", { method: "POST" });
+      const setupRes = await fetch("/api/demo/setup", {
+        method: "POST",
+        credentials: "include",
+      });
       if (!setupRes.ok) {
         const data = await setupRes.json().catch(() => ({}));
         throw new Error(data.error || "Demo setup failed");

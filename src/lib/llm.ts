@@ -448,6 +448,7 @@ async function executeOneTool(
   name: string,
   args: ReturnType<typeof parseToolArgs>,
   opts: {
+    toolsGranted?: boolean;
     stream?: boolean;
     onNeedsApproval?: (info: {
       approvalId: string;
@@ -465,8 +466,13 @@ async function executeOneTool(
     }
     return runShellTool({ command: args.command, cwd: args.cwd });
   }
-  const pluginResult = await executePluginTool(name, args as Record<string, unknown>);
-  if (pluginResult !== null) return pluginResult;
+  if (opts.toolsGranted) {
+    const pluginResult = await executePluginTool(
+      name,
+      args as Record<string, unknown>
+    );
+    if (pluginResult !== null) return pluginResult;
+  }
   return executeFsTool(name, args);
 }
 
@@ -487,11 +493,11 @@ export async function generateAssistantReply(opts: {
   streamTokens?: boolean;
 }): Promise<LlmResult> {
   await ensurePluginsLoaded();
-  const pluginContext = await getPluginContext();
   const settings = await getStudioSettings();
   const apiKey = settings.openrouterApiKey?.trim() || "";
   const toolsGranted = settings.allowedPaths.length > 0;
   const shellGranted = settings.enableShell && toolsGranted;
+  const pluginContext = await getPluginContext({ toolsGranted });
   const modelId = opts.agent.modelId?.trim() || "";
   const emit = opts.onEvent;
 
@@ -514,9 +520,7 @@ export async function generateAssistantReply(opts: {
   );
   const toolDefs = toolsGranted
     ? buildToolDefs(shellGranted, pluginContext.toolDefinitions)
-    : pluginContext.toolDefinitions.length > 0
-      ? pluginContext.toolDefinitions
-      : undefined;
+    : undefined;
 
   type OrMsg = Record<string, unknown>;
   const messages: OrMsg[] = [
@@ -596,6 +600,7 @@ export async function generateAssistantReply(opts: {
       const args = parseToolArgs(call.function?.arguments);
 
       const result = await executeOneTool(name, args, {
+        toolsGranted,
         stream: wantStream,
         onNeedsApproval: (info) => {
           const entry: ToolLogEntry = {

@@ -1,6 +1,6 @@
 # Atrium plugins
 
-Drop a folder here to extend Atrium without editing core agent code. Atrium scans `plugins/*/plugin.json` at server startup and optionally loads `index.mjs`, `index.js`, or `index.ts` for custom tools.
+Drop a folder here to extend Atrium without editing core agent code. Atrium scans `plugins/*/plugin.json` at server startup and optionally loads tool modules from your plugin folder.
 
 ## Quick start
 
@@ -10,7 +10,7 @@ Copy the included example:
 plugins/
   hello-world/
     plugin.json      # required metadata + optional prompt addendum
-    index.mjs          # optional tool handlers
+    index.mjs          # optional tool handlers (recommended)
 ```
 
 Restart the dev server after adding or changing a plugin.
@@ -30,7 +30,7 @@ Each plugin is a directory with a required manifest:
 
 ### Optional module (`index.mjs` recommended)
 
-Export tool handlers from `index.mjs`, `index.js`, or `index.ts`:
+Export tool handlers from `index.mjs`:
 
 ```javascript
 export const tools = [
@@ -53,18 +53,23 @@ export const tools = [
 
 Or export a default plugin object with a `tools` array.
 
+**Production loading:** At runtime in production (`NODE_ENV=production`), only `index.mjs` is loaded. During local dev, `index.js` and `index.ts` are also tried. Ship compiled `.mjs` for production plugins.
+
+There is **no remote plugin install** — plugins are trusted local code you place in this folder on the machine running Atrium.
+
 ### What Atrium wires automatically
 
 - **Prompt** — `promptAddendum` from every loaded plugin is appended in `buildSystemPrompt`.
-- **Tool metadata** — plugin tools appear in `KNOWN_TOOLS` / tool chips.
-- **LLM loop** — definitions are sent to OpenRouter; calls dispatch to your `execute` handler.
-- **REST** — `POST /api/tools` accepts plugin tool ids (no filesystem allowlist required unless your tool touches disk).
+- **Tool metadata** — plugin tools appear in `KNOWN_TOOLS` / tool chips once registered.
+- **LLM loop** — tool definitions are sent to OpenRouter **only when the operator has granted at least one allowlisted path** (same gate as filesystem tools).
+- **REST** — `POST /api/tools` runs plugin handlers only when the allowlist is non-empty.
 
-### Security notes
+### Security / trust model
 
-- Plugin tools run on the Atrium server with the same trust model as built-in tools.
-- Do not weaken path allowlist checks in core when adding filesystem plugins.
-- Shell access still flows through the existing approve/deny gate.
+- Plugins are **trusted local code** — same trust level as editing `src/`. There is no marketplace or remote install path.
+- Plugin tool handlers run on the Atrium server process. Do not drop in untrusted folders.
+- Filesystem and shell tools still require path allowlist + shell approval; plugin tools that touch disk should call the same helpers (`fs-tools`, `shell-tools`).
+- Prompt-only plugins (manifest without tools) are the safest good-first PR.
 
 ## Good first PR
 

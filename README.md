@@ -90,7 +90,7 @@ After pasting your OpenRouter key, click **Run 45s demo** on the chat home scree
 
 ## Plugins
 
-Third-party extensions live in [`plugins/`](plugins/) — drop in a folder with `plugin.json` (+ optional `index.mjs`) and restart the server. See [`plugins/README.md`](plugins/README.md) and the included `hello-world` example.
+Third-party extensions live in [`plugins/`](plugins/) — drop in a folder with `plugin.json` (+ optional `index.mjs`) and restart the server. Plugins are **trusted local code** (no remote install). Tool handlers are offered to agents only after the operator grants at least one allowlisted path. See [`plugins/README.md`](plugins/README.md) and the included `hello-world` example.
 
 ## Security notes
 

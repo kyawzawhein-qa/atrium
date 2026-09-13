@@ -10,7 +10,18 @@ import {
   getPluginToolMetas,
   resetPluginCache,
 } from "./plugins/registry";
-import { resetPluginInit } from "./plugins/init";
+import { resetPluginInit, getPluginContext } from "./plugins/init";
+
+test("plugin tool definitions require allowlist", async () => {
+  resetPluginCache();
+  resetPluginInit();
+  const without = await getPluginContext({ toolsGranted: false });
+  assert.equal(without.toolDefinitions.length, 0);
+  assert.match(without.promptAddendum, /hello-world|concise|plugin/i);
+
+  const withAllow = await getPluginContext({ toolsGranted: true });
+  assert.ok(withAllow.toolDefinitions.length > 0);
+});
 
 test("loads manifest-only and module-backed plugins from a directory", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "atrium-plug-"));

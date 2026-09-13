@@ -11,14 +11,17 @@ export async function ensurePluginsLoaded(): Promise<void> {
   initialized = true;
 }
 
-export async function getPluginContext(): Promise<{
+export async function getPluginContext(opts?: {
+  toolsGranted?: boolean;
+}): Promise<{
   promptAddendum: string;
   toolDefinitions: Awaited<ReturnType<typeof getPluginToolDefinitions>>;
 }> {
   await ensurePluginsLoaded();
+  const toolsGranted = opts?.toolsGranted ?? false;
   return {
     promptAddendum: await getPluginPromptAddendum(),
-    toolDefinitions: await getPluginToolDefinitions(),
+    toolDefinitions: toolsGranted ? await getPluginToolDefinitions() : [],
   };
 }
 
