@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Atrium — self-hosted multi-agent studio">
+  <title>Atrium</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0c1216"/>
+      <stop offset="55%" stop-color="#101820"/>
+      <stop offset="100%" stop-color="#152028"/>
+    </linearGradient>
+    <linearGradient id="cardGlow" x1="640" y1="120" x2="640" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7eb6b0" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#7eb6b0" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <!-- Subtle grid -->
+  <g stroke="#2a3a44" stroke-width="1" opacity="0.35">
+    <path d="M0 160 H1280 M0 320 H1280 M0 480 H1280"/>
+    <path d="M160 0 V640 M320 0 V640 M480 0 V640 M640 0 V640 M800 0 V640 M960 0 V640 M1120 0 V640"/>
+  </g>
+  <!-- Soft teal bloom -->
+  <circle cx="980" cy="160" r="180" fill="#7eb6b0" opacity="0.08"/>
+  <circle cx="240" cy="520" r="140" fill="#7eb6b0" opacity="0.06"/>
+
+  <!-- Studio card -->
+  <rect x="140" y="100" width="1000" height="440" rx="28" fill="#152028" stroke="#2a3a44" stroke-width="2"/>
+  <rect x="140" y="100" width="1000" height="440" rx="28" fill="url(#cardGlow)"/>
+
+  <!-- Mini mark -->
+  <g transform="translate(200,170)">
+    <rect width="56" height="56" rx="14" fill="#0c1216" stroke="#2a3a44" stroke-width="1.5"/>
+    <path d="M28 10 L44 46 H38 L34.5 38 H21.5 L18 46 H12 Z" fill="#e8eef2"/>
+    <path d="M21.5 36 H34.5 L28 18 Z" fill="#7eb6b0"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="280" y="212"
+        font-family="Georgia, 'Times New Roman', Times, serif"
+        font-size="64"
+        font-weight="600"
+        fill="#e8eef2">Atrium</text>
+
+  <!-- Tagline -->
+  <text x="200" y="280"
+        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="26"
+        fill="#9bb0bc">Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.</text>
+
+  <!-- Divider -->
+  <rect x="200" y="318" width="120" height="3" rx="1.5" fill="#7eb6b0"/>
+
+  <!-- Agent chips (faint, no photos) -->
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18">
+    <!-- Mara -->
+    <rect x="200" y="360" width="200" height="56" rx="14" fill="#0c1216" stroke="#2a3a44" stroke-width="1.5" opacity="0.92"/>
+    <circle cx="232" cy="388" r="14" fill="#7eb6b0" opacity="0.35"/>
+    <text x="232" y="393" text-anchor="middle" font-size="13" font-weight="600" fill="#e8eef2">M</text>
+    <text x="256" y="386" fill="#e8eef2" font-size="16" font-weight="600">Mara Chen</text>
+    <text x="256" y="406" fill="#9bb0bc" font-size="12">Senior Developer</text>
+
+    <!-- Theo -->
+    <rect x="420" y="360" width="200" height="56" rx="14" fill="#0c1216" stroke="#2a3a44" stroke-width="1.5" opacity="0.78"/>
+    <circle cx="452" cy="388" r="14" fill="#7eb6b0" opacity="0.28"/>
+    <text x="452" y="393" text-anchor="middle" font-size="13" font-weight="600" fill="#e8eef2">T</text>
+    <text x="476" y="386" fill="#e8eef2" font-size="16" font-weight="600">Theo Rios</text>
+    <text x="476" y="406" fill="#9bb0bc" font-size="12">Graphic Designer</text>
+
+    <!-- Imani -->
+    <rect x="640" y="360" width="220" height="56" rx="14" fill="#0c1216" stroke="#2a3a44" stroke-width="1.5" opacity="0.64"/>
+    <circle cx="672" cy="388" r="14" fill="#7eb6b0" opacity="0.22"/>
+    <text x="672" y="393" text-anchor="middle" font-size="13" font-weight="600" fill="#e8eef2">I</text>
+    <text x="696" y="386" fill="#e8eef2" font-size="16" font-weight="600">Imani Brooks</text>
+    <text x="696" y="406" fill="#9bb0bc" font-size="12">QA Automation</text>
+  </g>
+
+  <!-- Footer strip -->
+  <text x="200" y="480"
+        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="14"
+        fill="#9bb0bc"
+        opacity="0.85">OpenRouter · SQLite · Path allowlist · Studio auth</text>
+</svg>

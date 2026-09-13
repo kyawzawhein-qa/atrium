@@ -13,9 +13,23 @@ const display = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Atrium — Multi-agent desk",
+  title: "Atrium",
   description:
-    "Kyaw Zaw Hein's own-brand multi-agent chat assistant for focused collaborative work.",
+    "Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.",
+  openGraph: {
+    title: "Atrium",
+    description:
+      "Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.",
+    images: [{ url: "/og.png", width: 1280, height: 640 }],
+  },
+  icons: { icon: "/favicon.svg" },
+  twitter: {
+    card: "summary_large_image",
+    title: "Atrium",
+    description:
+      "Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.",
+    images: ["/og.png"],
+  },
 };
 
 export default function RootLayout({

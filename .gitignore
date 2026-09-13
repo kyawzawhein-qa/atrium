@@ -44,3 +44,6 @@ next-env.d.ts
 *.db-journal
 prisma/*.db
 prisma/*.db-journal
+
+# keep example env tracked
+!.env.example

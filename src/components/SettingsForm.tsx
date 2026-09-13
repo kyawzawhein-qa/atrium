@@ -147,9 +147,11 @@ export function SettingsForm() {
           <p className="mt-2 text-sm leading-relaxed text-ink-mist/80">
             Grant Atrium absolute folders on{" "}
             <strong className="font-medium text-ink-foam">the machine running this server</strong>
-            , not the browser. Tools <code className="text-coastal">list_dir</code> and{" "}
-            <code className="text-coastal">read_file</code> refuse anything outside this
-            list. If the list is empty, those tools stay not granted.
+            , not the browser. Agents may <code className="text-coastal">list_dir</code>,{" "}
+            <code className="text-coastal">read_file</code>,{" "}
+            <code className="text-coastal">write_file</code>, and{" "}
+            <code className="text-coastal">edit_file</code> only inside this list. Empty
+            list means those tools stay not granted.
           </p>
         </div>
 

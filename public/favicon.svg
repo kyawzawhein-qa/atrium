@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Atrium">
+  <title>Atrium</title>
+  <rect width="32" height="32" rx="7" fill="#0c1216"/>
+  <path d="M16 6 L26 26 H22.5 L20 20 H12 L9.5 26 H6 Z" fill="#e8eef2"/>
+  <path d="M12 18 H20 L16 9.5 Z" fill="#7eb6b0"/>
+</svg>

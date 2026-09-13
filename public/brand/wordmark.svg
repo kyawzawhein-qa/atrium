@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 72" role="img" aria-label="Atrium">
+  <title>Atrium</title>
+  <text x="0" y="52"
+        font-family="Georgia, 'Times New Roman', Times, serif"
+        font-size="56"
+        font-weight="600"
+        letter-spacing="1.5"
+        fill="#e8eef2">Atrium</text>
+  <rect x="2" y="62" width="48" height="3" rx="1.5" fill="#7eb6b0"/>
+</svg>

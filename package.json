@@ -1,7 +1,7 @@
 {
   "name": "atrium",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -36,5 +36,29 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
     "typescript": "^5"
+  },
+  "description": "Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.",
+  "license": "MIT",
+  "author": "Kyaw Zaw Hein",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kyawzawhein-qa/atrium.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kyawzawhein-qa/atrium/issues"
+  },
+  "homepage": "https://github.com/kyawzawhein-qa/atrium#readme",
+  "keywords": [
+    "multi-agent",
+    "openrouter",
+    "nextjs",
+    "self-hosted",
+    "llm",
+    "ai-agents",
+    "prisma",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
   }
 }

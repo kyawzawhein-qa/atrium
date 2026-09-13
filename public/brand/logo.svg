@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Atrium">
+  <title>Atrium</title>
+  <!-- Architectural atrium / skylight mark: letter A as a peaked atrium with light well -->
+  <defs>
+    <linearGradient id="skylight" x1="64" y1="18" x2="64" y2="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7eb6b0" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#7eb6b0" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer frame -->
+  <rect x="10" y="10" width="108" height="108" rx="22" fill="#0c1216"/>
+  <rect x="10" y="10" width="108" height="108" rx="22" fill="none" stroke="#2a3a44" stroke-width="2"/>
+  <!-- Atrium A: peaked roof + crossbar + light well -->
+  <path d="M64 28 L96 96 H84 L76 78 H52 L44 96 H32 Z" fill="#e8eef2"/>
+  <path d="M52 70 H76 L64 42 Z" fill="url(#skylight)"/>
+  <!-- Skylight mullions -->
+  <path d="M64 42 V70 M52 70 L64 42 L76 70" fill="none" stroke="#0c1216" stroke-width="1.5" stroke-linejoin="round" opacity="0.45"/>
+  <!-- Floor foam accent -->
+  <rect x="40" y="100" width="48" height="4" rx="2" fill="#7eb6b0" opacity="0.85"/>
+</svg>

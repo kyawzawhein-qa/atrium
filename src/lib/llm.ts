@@ -64,12 +64,64 @@ const FS_TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Create or overwrite a UTF-8 text file at an absolute path inside the allowlist. Max 256KB. Parent folders are created if they stay inside a granted root.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute file path on the server machine",
+          },
+          content: {
+            type: "string",
+            description: "Full file contents to write",
+          },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_file",
+      description:
+        "Replace old_string with new_string in an allowlisted text file. Fails if old_string is missing. If it matches more than once, set replace_all true or make old_string unique.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute file path on the server machine",
+          },
+          old_string: {
+            type: "string",
+            description: "Exact text to find",
+          },
+          new_string: {
+            type: "string",
+            description: "Replacement text",
+          },
+          replace_all: {
+            type: "boolean",
+            description: "Replace every match instead of requiring a unique match",
+          },
+        },
+        required: ["path", "old_string", "new_string"],
+      },
+    },
+  },
 ];
 
 function buildSystemPrompt(agent: AgentVoice, toolsGranted: boolean): string {
   const persona = agent.description.trim() || `You are ${agent.name}, an Atrium specialist.`;
   const tools = toolsGranted
-    ? "The operator has granted filesystem tools (list_dir, read_file) for specific absolute paths. Use them when the user asks about files in those locations. If a path is outside the allowlist, say so and do not invent contents."
+    ? "The operator has granted filesystem tools (list_dir, read_file, write_file, edit_file) for specific absolute paths. Use them when the user asks to inspect or change files in those locations. Always use absolute paths. If a path is outside the allowlist, say so and do not invent contents. After a successful write or edit, briefly confirm the path."
     : "Filesystem tools are not granted. The operator has not added any allowed computer paths. Do not claim you can read or list files.";
   return [
     persona,
@@ -138,11 +190,23 @@ async function callOpenRouter(opts: {
   return data.choices?.[0] ?? {};
 }
 
-function parseToolArgs(raw?: string): { path?: string } {
+function parseToolArgs(raw?: string): {
+  path?: string;
+  content?: string;
+  old_string?: string;
+  new_string?: string;
+  replace_all?: boolean;
+} {
   if (!raw) return {};
   try {
-    const parsed = JSON.parse(raw) as { path?: unknown };
-    return { path: typeof parsed.path === "string" ? parsed.path : undefined };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      path: typeof parsed.path === "string" ? parsed.path : undefined,
+      content: typeof parsed.content === "string" ? parsed.content : undefined,
+      old_string: typeof parsed.old_string === "string" ? parsed.old_string : undefined,
+      new_string: typeof parsed.new_string === "string" ? parsed.new_string : undefined,
+      replace_all: parsed.replace_all === true,
+    };
   } catch {
     return {};
   }

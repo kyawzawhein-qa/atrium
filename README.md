@@ -1,23 +1,32 @@
 # Atrium
 
-**Atrium** is Kyaw Zaw Hein’s own-brand multi-agent chat assistant — a calm “studio desk” for switching between specialist agents in one place.
+**Self-hosted multi-agent studio. Your OpenRouter key. Your models. Your files.**
 
-This is an original product (layout, copy, prompts, and branding). It is not a clone of Grok Bot, Cursor, ChatGPT, or xAI.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7eb6b0?style=flat-square" alt="MIT License" /></a>
+  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=nextdotjs" alt="Next.js" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-152028?style=flat-square" alt="PRs welcome" /></a>
+</p>
 
-## Phase 1 — what you can do
+<p align="center">
+  <img src="docs/hero.svg" alt="Atrium — self-hosted multi-agent studio" width="100%" />
+</p>
 
-1. **Paste an OpenRouter API key** in Settings. It is stored in the SQLite `Settings` singleton, never in git.
-2. **Create custom agents** one by one: name, description (this *is* the persona / system prompt), and a model from that key.
-3. **Chat** — each agent’s completions go to `https://openrouter.ai/api/v1` with the saved key and that agent’s `modelId`.
-4. **Grant computer paths** — add absolute folders Atrium may touch. `list_dir` and `read_file` reject anything outside the allowlist. If no paths are granted, those tools stay unavailable.
+Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https://github.com/kyawzawhein-qa). Define specialist agents, pick an OpenRouter model per agent, and optionally grant absolute filesystem paths so agents can list, read, write, and edit files — all on your machine, with a local SQLite database.
 
-## Stack
+## Why Atrium
 
-- Next.js App Router + TypeScript
-- Tailwind CSS v4
-- Prisma + SQLite
-- Session cookie auth (`jose` signed JWT)
-- OpenRouter for chat (`Authorization: Bearer`, `HTTP-Referer`, `X-Title: Atrium`)
+- **Your key, your models** — Paste an OpenRouter API key in Settings. Each agent chooses its own model. The key never lives in `.env` or git.
+- **Agents you own** — Name, description (system prompt), and model are first-class. Seeded demos are ordinary, deletable rows.
+- **Bounded computer access** — An explicit path allowlist gates `list_dir`, `read_file`, `write_file`, and `edit_file` on the server. Empty allowlist means tools are not granted.
+
+## Features
+
+- **Custom agents** with per-agent OpenRouter models
+- **Path allowlist** for absolute paths (`list_dir`, `read_file`, `write_file`, `edit_file`)
+- **Local SQLite** via Prisma (settings, agents, threads, messages)
+- **Studio auth** — password gate with a signed JWT cookie (`ATRIUM_PASSWORD`)
 
 ## Quick start
 
@@ -28,100 +37,56 @@ npm run db:setup
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), sign in with the studio password.
+Open [http://localhost:3000](http://localhost:3000) and sign in.
 
-### Login
-
-| Variable | Default (local demo) |
+| Variable | Local default |
 | --- | --- |
 | `ATRIUM_PASSWORD` | `atrium` |
 
-Copy `.env.example` → `.env` and adjust as needed. Session cookies are signed with `ATRIUM_SESSION_SECRET`.
+Set `ATRIUM_SESSION_SECRET` for anything beyond a local demo.
 
-**Do not put the OpenRouter key in `.env`.** Paste it in the app.
+> **Do not put your OpenRouter API key in `.env`.** Paste it in the app at **Settings**. It is stored in the SQLite Settings row and shown masked after save.
 
-## Phase 1 setup (first run)
+### First session
 
-1. Sign in.
-2. Open **Settings**.
-3. Paste your OpenRouter API key and save. After save, the field shows a masked preview (`sk-o••••abcd`). You can replace or remove it anytime.
-4. Open **Agents → New agent**.
-   - Name (slug is generated automatically)
-   - Description — used as the system prompt / persona
-   - Model — loaded from `GET /api/openrouter/models` (proxies OpenRouter `GET /api/v1/models` with the saved key). The list prefers chat-capable models when the API marks them. Shown as **name — id**.
-5. Start a chat. Completions use that agent’s `modelId`.
-6. Optionally grant folders under **Computer path allowlist**.
+1. Sign in with the studio password.
+2. Open **Settings** → paste your OpenRouter key → save.
+3. Create an agent (or edit a seeded one): name, description, model.
+4. Start a chat. Completions use that agent’s `modelId` via `https://openrouter.ai/api/v1`.
+5. Optionally grant absolute folders under the path allowlist.
 
-### If there is no key
+## Security notes
 
-The UI shows: **Add OpenRouter key to create agents and chat for real.**  
-Chat still works with an offline stub that says the key is missing. No hardcoded Mara / Theo / Imani voice lock — the stub uses the agent’s name and description.
+- **Allowlist** — Tools run on the machine hosting Atrium. Only absolute paths are accepted. Traversal outside granted roots is rejected. An empty allowlist returns “not granted.”
+- **Key storage** — The OpenRouter key lives in SQLite, not environment files. Never commit `.env`, `*.db`, or keys.
+- **Auth** — Change `ATRIUM_PASSWORD` and `ATRIUM_SESSION_SECRET` for shared or production hosts. See [SECURITY.md](SECURITY.md).
 
-## Computer path allowlist (important)
+## Architecture
 
-Filesystem tools run **on the machine hosting the Atrium server**, not in the browser and not on a remote operator’s laptop unless that is the same machine.
+```mermaid
+flowchart LR
+  Browser -->|JWT cookie| Proxy["src/proxy.ts"]
+  Proxy --> App["Next.js App Router"]
+  App --> SQLite[(Prisma / SQLite)]
+  App -->|chat completions| OpenRouter["OpenRouter API"]
+  App -->|list_dir / read_file / write_file / edit_file| FS["Server filesystem\n(allowlist)"]
+```
 
-- Add absolute paths only (`/home/you/work`, `C:\Users\you\Documents`).
-- Stored as a JSON string array on the Settings row.
-- `list_dir` and `read_file` resolve the target and reject anything outside a granted root (including `..` traversal).
-- Empty allowlist → tools return **not granted**.
-- Text files only; reads cap at 64KB; directory listings cap at 200 entries.
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-When the model is live and paths are granted, Atrium offers those two tools via OpenRouter function calling.
+## Roadmap
 
-## Data model
+Honest and not yet implemented:
 
-**Settings** (singleton `id = "singleton"`)
+- Telegram + web chat surfaces
+- GitHub repository tools
 
-- `openrouterApiKey` — optional string
-- `allowedPaths` — JSON string array of absolute paths
+## Contributing
 
-**Agent**
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Bug reports and thoughtful PRs are welcome.
 
-- `name`, `description` (persona), `modelId`, `modelName` (display)
-- `slug` auto-generated from name
-- optional `title` / `accent` (seeded specialists keep a short role label)
-- Seeded demo agents remain and **are deletable**. New creates are first-class.
+## License
 
-## LLM (`src/lib/llm.ts`)
+[MIT](LICENSE) © 2026 [Kyaw Zaw Hein](https://github.com/kyawzawhein-qa)
 
-1. **OpenRouter** when a key is saved — `https://openrouter.ai/api/v1/chat/completions`, model = `agent.modelId` (fallback `openai/gpt-4o-mini` if unset).
-2. **Offline stub** only if no key.
-
-The API key is never written to logs.
-
-## Routes
-
-| Path | Purpose |
-| --- | --- |
-| `/settings` | API key + path allowlist |
-| `/agents` | List / delete agents |
-| `/agents/new` | Create agent |
-| `/agents/[id]/edit` | Edit agent |
-| `/chat` | Threads |
-| `GET /api/openrouter/models` | Proxied model list |
-| `POST /api/tools` | `{ tool: "list_dir" \| "read_file", path }` |
-
-## Seeded demo agents
-
-| Agent | Role |
-| --- | --- |
-| Mara Chen | Senior Developer |
-| Theo Rios | Graphic Designer |
-| Imani Brooks | QA Automation |
-
-These are ordinary rows. Edit or delete them like any custom agent.
-
-## Scripts
-
-| Script | Purpose |
-| --- | --- |
-| `npm run db:setup` | generate client + push schema + seed |
-| `npx prisma db push` | apply schema to SQLite |
-| `npm run dev` | local server |
-| `npm run build` | production build |
-| `npm start` | serve production build |
-
-## Visual notes
-
-Coastal-ink palette: deep ink panels, foam text, teal coastal accents. Distinctive serif wordmark + humanist UI type — not patterned after popular AI chat UIs.
+**Repository:** [github.com/kyawzawhein-qa/atrium](https://github.com/kyawzawhein-qa/atrium)

@@ -1,31 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listDir, readFileTool } from "@/lib/fs-tools";
+import { executeFsTool } from "@/lib/fs-tools";
+
+const ALLOWED = new Set(["list_dir", "read_file", "write_file", "edit_file"]);
 
 export async function POST(req: NextRequest) {
-  let body: { tool?: string; path?: string };
+  let body: {
+    tool?: string;
+    path?: string;
+    content?: string;
+    old_string?: string;
+    new_string?: string;
+    replace_all?: boolean;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const tool = body.tool?.trim();
-  const target = body.path ?? "";
-  if (tool !== "list_dir" && tool !== "read_file") {
+  const tool = body.tool?.trim() || "";
+  if (!ALLOWED.has(tool)) {
     return NextResponse.json(
-      { error: "tool must be list_dir or read_file" },
+      { error: "tool must be list_dir, read_file, write_file, or edit_file" },
       { status: 400 }
     );
   }
 
-  const result =
-    tool === "list_dir" ? await listDir(target) : await readFileTool(target);
+  const result = await executeFsTool(tool, {
+    path: body.path,
+    content: body.content,
+    old_string: body.old_string,
+    new_string: body.new_string,
+    replace_all: body.replace_all,
+  });
 
-  const status = result.ok
+  const rec = result as { ok?: boolean; code?: string };
+  const status = rec.ok
     ? 200
-    : result.code === "not_granted" || result.code === "outside_allowlist"
+    : rec.code === "not_granted" || rec.code === "outside_allowlist"
       ? 403
-      : result.code === "not_found"
+      : rec.code === "not_found"
         ? 404
         : 400;
   return NextResponse.json(result, { status });
