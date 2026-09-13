@@ -12,6 +12,8 @@ import {
 } from "./shell-tools";
 import { getStudioSettings } from "./settings";
 import { OPENROUTER_BASE, openRouterHeaders } from "./openrouter";
+import { ensurePluginsLoaded, getPluginContext } from "./plugins/init";
+import { executePluginTool } from "./plugins/registry";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -150,9 +152,14 @@ const FS_TOOLS = [
   },
 ];
 
-function buildToolDefs(shellGranted: boolean) {
-  if (shellGranted) return [...FS_TOOLS, shellToolDefinition()];
-  return FS_TOOLS;
+function buildToolDefs(
+  shellGranted: boolean,
+  pluginDefs: Awaited<
+    ReturnType<typeof getPluginContext>
+  >["toolDefinitions"] = []
+) {
+  const base = shellGranted ? [...FS_TOOLS, shellToolDefinition()] : FS_TOOLS;
+  return pluginDefs.length > 0 ? [...base, ...pluginDefs] : base;
 }
 
 function detectFsIntent(text: string): "write" | "edit" | "read" | "list" | null {
@@ -175,7 +182,8 @@ function detectFsIntent(text: string): "write" | "edit" | "read" | "list" | null
 function buildSystemPrompt(
   agent: AgentVoice,
   toolsGranted: boolean,
-  shellGranted: boolean
+  shellGranted: boolean,
+  pluginAddendum = ""
 ): string {
   const persona = agent.description.trim() || `You are ${agent.name}, an Atrium specialist.`;
   let tools: string;
@@ -204,7 +212,10 @@ function buildSystemPrompt(
     "",
     `Your name is ${agent.name}. Stay in this persona. Do not impersonate other agents.`,
     tools,
-  ].join("\n");
+    pluginAddendum.trim(),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildOfflineReply(agent: AgentVoice, userText: string): string {
@@ -454,6 +465,8 @@ async function executeOneTool(
     }
     return runShellTool({ command: args.command, cwd: args.cwd });
   }
+  const pluginResult = await executePluginTool(name, args as Record<string, unknown>);
+  if (pluginResult !== null) return pluginResult;
   return executeFsTool(name, args);
 }
 
@@ -473,6 +486,8 @@ export async function generateAssistantReply(opts: {
   onEvent?: (event: StreamEvent) => void;
   streamTokens?: boolean;
 }): Promise<LlmResult> {
+  await ensurePluginsLoaded();
+  const pluginContext = await getPluginContext();
   const settings = await getStudioSettings();
   const apiKey = settings.openrouterApiKey?.trim() || "";
   const toolsGranted = settings.allowedPaths.length > 0;
@@ -491,8 +506,17 @@ export async function generateAssistantReply(opts: {
   }
 
   const model = modelId || "openai/gpt-4o-mini";
-  const system = buildSystemPrompt(opts.agent, toolsGranted, shellGranted);
-  const toolDefs = toolsGranted ? buildToolDefs(shellGranted) : undefined;
+  const system = buildSystemPrompt(
+    opts.agent,
+    toolsGranted,
+    shellGranted,
+    pluginContext.promptAddendum
+  );
+  const toolDefs = toolsGranted
+    ? buildToolDefs(shellGranted, pluginContext.toolDefinitions)
+    : pluginContext.toolDefinitions.length > 0
+      ? pluginContext.toolDefinitions
+      : undefined;
 
   type OrMsg = Record<string, unknown>;
   const messages: OrMsg[] = [
@@ -504,7 +528,7 @@ export async function generateAssistantReply(opts: {
   ];
 
   const toolLog: ToolLogEntry[] = [];
-  const maxRounds = toolsGranted ? 4 : 1;
+  const maxRounds = toolDefs ? 4 : 1;
   let finalContent = "";
   const wantStream = Boolean(opts.streamTokens && emit);
 

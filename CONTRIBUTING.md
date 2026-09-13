@@ -33,6 +33,21 @@ Open [http://localhost:3000](http://localhost:3000) — local-first, no login (`
 5. Open a pull request against `main` using the PR template.
 6. Describe what changed, why, and how you verified it.
 
+## Plugins (good first issue)
+
+Atrium loads drop-in extensions from the [`plugins/`](plugins/) folder. Each plugin is a directory with:
+
+- **`plugin.json`** (required) — `id`, `name`, `description`, optional `promptAddendum`
+- **`index.mjs`** (optional) — export `tools` with OpenRouter schemas + `execute` handlers
+
+See [`plugins/README.md`](plugins/README.md) for the full hook contract. The shipped [`plugins/hello-world/`](plugins/hello-world/) example is a minimal PR template: copy it, rename, and open a PR.
+
+Core wiring lives in `src/lib/plugins/` (`loader.ts`, `registry.ts`, `init.ts`) and hooks into `src/lib/llm.ts` plus `src/lib/tools.ts`.
+
+## Launch demo
+
+To verify tool chips locally, follow [`docs/DEMO.md`](docs/DEMO.md) (~45 seconds after setup). The in-app **Run 45s demo** button grants `demo-workspace/`, enables shell, and walks through `write_file` plus shell Approve / Deny.
+
 ## Code style
 
 - **TypeScript** throughout (`src/`). Prefer explicit types at API boundaries.

@@ -1,0 +1,6 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "description": "Tiny example plugin that adds a greeting tool and a prompt line.",
+  "promptAddendum": "The hello-world plugin is active. When the user asks for the Atrium plugin greeting, call say_hello with their name if provided."
+}

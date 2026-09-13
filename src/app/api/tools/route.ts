@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { executeFsTool } from "@/lib/fs-tools";
 import { runShellTool } from "@/lib/shell-tools";
+import { ensurePluginsLoaded } from "@/lib/plugins/init";
+import { executePluginTool } from "@/lib/plugins/registry";
 
 const FS_ALLOWED = new Set(["list_dir", "read_file", "write_file", "edit_file"]);
 
 export async function POST(req: NextRequest) {
+  await ensurePluginsLoaded();
   let body: {
     tool?: string;
     path?: string;
@@ -40,10 +43,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (!FS_ALLOWED.has(tool)) {
+    const pluginResult = await executePluginTool(tool, body as Record<string, unknown>);
+    if (pluginResult !== null) {
+      const rec = pluginResult as { ok?: boolean };
+      return NextResponse.json(pluginResult, { status: rec.ok ? 200 : 400 });
+    }
     return NextResponse.json(
       {
         error:
-          "tool must be list_dir, read_file, write_file, edit_file, or run_shell",
+          "tool must be list_dir, read_file, write_file, edit_file, run_shell, or a loaded plugin tool id",
       },
       { status: 400 }
     );

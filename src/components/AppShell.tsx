@@ -34,6 +34,12 @@ export function AppShell({
   const [streamingText, setStreamingText] = useState("");
   const [liveTools, setLiveTools] = useState<LiveTool[]>([]);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [demoGuide, setDemoGuide] = useState<{
+    demoPath: string;
+    step: 1 | 2;
+    prompts: { writeFile: string; shell: string };
+  } | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
 
   const loadAgents = useCallback(async () => {
     const res = await fetch("/api/agents");
@@ -91,6 +97,57 @@ export function AppShell({
     const id = detail?.agentId || selectedAgentId;
     return agents.find((a) => a.id === id);
   }, [agents, detail, selectedAgentId]);
+
+  async function startDemo() {
+    setDemoBusy(true);
+    setError(null);
+    try {
+      const setupRes = await fetch("/api/demo/setup", { method: "POST" });
+      if (!setupRes.ok) {
+        const data = await setupRes.json().catch(() => ({}));
+        throw new Error(data.error || "Demo setup failed");
+      }
+      const setup = (await setupRes.json()) as {
+        demoPath: string;
+        agentId: string;
+        prompts: { writeFile: string; shell: string };
+      };
+
+      await loadSettings();
+      await loadAgents();
+
+      setSelectedAgentId(setup.agentId);
+      setDemoGuide({
+        demoPath: setup.demoPath,
+        step: 1,
+        prompts: setup.prompts,
+      });
+      setDraft(setup.prompts.writeFile);
+
+      const threadRes = await fetch("/api/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: setup.agentId }),
+      });
+      if (!threadRes.ok) throw new Error("Could not create demo thread");
+      const threadData = await threadRes.json();
+      await loadThreads();
+      setActiveId(threadData.thread.id);
+      router.replace(`/chat/${threadData.thread.id}`);
+      setMobileNav(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Demo error");
+    } finally {
+      setDemoBusy(false);
+    }
+  }
+
+  function applyDemoPrompt(step: 1 | 2) {
+    if (!demoGuide) return;
+    const text = step === 1 ? demoGuide.prompts.writeFile : demoGuide.prompts.shell;
+    setDraft(text);
+    setDemoGuide({ ...demoGuide, step });
+  }
 
   async function createThread(agentId?: string) {
     const aid = agentId || selectedAgentId || agents[0]?.id;
@@ -292,6 +349,10 @@ export function AppShell({
             // Drop the live bubble before reloading so we do not flash duplicates.
             setStreamingText("");
             setLiveTools([]);
+            if (demoGuide?.step === 1) {
+              setDemoGuide({ ...demoGuide, step: 2 });
+              setDraft(demoGuide.prompts.shell);
+            }
             if (threadId) await loadThread(threadId);
             await loadThreads();
           }
@@ -386,6 +447,31 @@ export function AppShell({
           </Link>
         </header>
 
+        {demoGuide && (
+          <div className="border-b border-coastal/25 bg-coastal/10 px-4 py-2 text-center text-sm text-ink-foam">
+            <span className="font-medium">45s demo</span> — step {demoGuide.step} of 2
+            {demoGuide.step === 1
+              ? ": send the write_file prompt below"
+              : ": send the shell prompt, then Approve the chip"}
+            <span className="mx-2 text-ink-mist/60">·</span>
+            <span className="text-ink-mist">{demoGuide.demoPath}</span>
+            <button
+              type="button"
+              className="ml-3 underline underline-offset-2"
+              onClick={() => applyDemoPrompt(demoGuide.step)}
+            >
+              Copy prompt {demoGuide.step}
+            </button>
+            <button
+              type="button"
+              className="ml-3 text-ink-mist hover:text-ink-foam"
+              onClick={() => setDemoGuide(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {hasKey === false && (
           <div className="border-b border-amber-400/20 bg-amber-400/10 px-4 py-2 text-center text-sm text-amber-100">
             Add OpenRouter key to create agents and chat for real.{" "}
@@ -408,14 +494,29 @@ export function AppShell({
                   the left rail. Each specialist keeps their own voice, model,
                   and brief. No login — local-first studio.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void createThread()}
-                  disabled={busy || !selectedAgentId}
-                  className="mt-6 rounded-xl bg-coastal px-4 py-2 text-sm font-semibold text-ink-deep hover:bg-coastal-bright disabled:opacity-50"
-                >
-                  Begin conversation
-                </button>
+                <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
+                  <button
+                    type="button"
+                    onClick={() => void startDemo()}
+                    disabled={demoBusy || busy || hasKey === false}
+                    className="rounded-xl border border-coastal/50 bg-coastal/15 px-4 py-2 text-sm font-semibold text-ink-foam hover:bg-coastal/25 disabled:opacity-50"
+                  >
+                    {demoBusy ? "Setting up demo…" : "Run 45s demo"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void createThread()}
+                    disabled={busy || !selectedAgentId}
+                    className="rounded-xl bg-coastal px-4 py-2 text-sm font-semibold text-ink-deep hover:bg-coastal-bright disabled:opacity-50"
+                  >
+                    Begin conversation
+                  </button>
+                </div>
+                {hasKey === false && (
+                  <p className="mt-3 text-xs text-ink-mist/70">
+                    Add an OpenRouter key in Settings to run the demo.
+                  </p>
+                )}
               </div>
             )}
 

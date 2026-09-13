@@ -84,6 +84,14 @@ npm run dev
 4. Optionally grant absolute folders under the path allowlist.
 5. Optionally enable **Allow shell in granted folders** for `run_shell` (every command shows Approve / Deny).
 
+### 45-second demo
+
+After pasting your OpenRouter key, click **Run 45s demo** on the chat home screen. It grants `demo-workspace/`, enables shell, and walks you through `write_file` and shell approval. Full script: [docs/DEMO.md](docs/DEMO.md).
+
+## Plugins
+
+Third-party extensions live in [`plugins/`](plugins/) — drop in a folder with `plugin.json` (+ optional `index.mjs`) and restart the server. See [`plugins/README.md`](plugins/README.md) and the included `hello-world` example.
+
 ## Security notes
 
 - **Allowlist** — Tools run on the machine hosting Atrium. Only absolute paths are accepted. Traversal outside granted roots is rejected. An empty allowlist returns “not granted.”
