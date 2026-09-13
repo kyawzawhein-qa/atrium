@@ -9,13 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 2 tool loop: SSE streaming chat (`token` / `tool` / `done` / `error`), structured tool log chips on assistant messages.
+- Allowlisted `run_shell` with Settings toggle (“Allow shell in granted folders”), hard-reject for dangerous commands, and Approve/Deny for mutating commands (`POST /api/tools/approve`).
 - Allowlisted `write_file` and `edit_file` tools (text files, 256KB cap, unique-match edit).
 
 ### Changed
 
-- Auth gate uses Next.js 16 `src/proxy.ts` (replacing `middleware.ts` naming).
-- Public open-source polish: README, license, contributing guides, CI, and brand assets.
+- Local-first: no login / password gate. `/` redirects to `/chat`. OpenRouter-only (no local-model download).
 - Windows allowlist matching is case-insensitive.
+- Public open-source polish: README, license, contributing guides, CI, and brand assets.
+
+### Removed
+
+- Studio password auth / JWT session / Sign out.
 
 ## [0.1.0] - 2026-09-12
 

@@ -13,6 +13,8 @@ model Settings {
   openrouterApiKey String?
   /// JSON array of absolute filesystem paths granted to Atrium tools.
   allowedPaths     String   @default("[]")
+  /// When true and allowlist is non-empty, agents may use run_shell inside granted folders.
+  enableShell      Boolean  @default(false)
   updatedAt        DateTime @updatedAt
 }
 

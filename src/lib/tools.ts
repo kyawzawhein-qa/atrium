@@ -1,4 +1,4 @@
-/** Tool metadata + mention extraction. Filesystem tools are implemented in fs-tools.ts. */
+/** Tool metadata + mention extraction. Filesystem tools are implemented in fs-tools.ts; shell in shell-tools.ts. */
 
 export const KNOWN_TOOLS = [
   {
@@ -21,16 +21,27 @@ export const KNOWN_TOOLS = [
     label: "Edit file",
     hint: "Replace text in a granted file (unique match, or replace_all)",
   },
+  {
+    id: "run_shell",
+    label: "Shell",
+    hint: "Run an allowlisted shell command (mutating needs approval)",
+  },
   { id: "code_search", label: "Code search", hint: "Scan a workspace for symbols" },
   { id: "sketch_board", label: "Sketch board", hint: "Draft layout frames" },
   { id: "test_runner", label: "Test runner", hint: "Execute a suite dry-run" },
   { id: "web_lookup", label: "Web lookup", hint: "Fetch public reference notes" },
 ] as const;
 
-const FS_IDS = new Set(["list_dir", "read_file", "write_file", "edit_file"]);
+const LIVE_IDS = new Set([
+  "list_dir",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "run_shell",
+]);
 
 const TOOL_PATTERN =
-  /\b(?:use|call|invoke|run)\s+(?:the\s+)?(list[_\s-]?dir|read[_\s-]?file|write[_\s-]?file|edit[_\s-]?file|code[_\s-]?search|sketch[_\s-]?board|test[_\s-]?runner|web[_\s-]?lookup)\b|\b\[(list_dir|read_file|write_file|edit_file|code_search|sketch_board|test_runner|web_lookup)\]|\bTOOL:\s*(list_dir|read_file|write_file|edit_file|code_search|sketch_board|test_runner|web_lookup)\b/gi;
+  /\b(?:use|call|invoke|run)\s+(?:the\s+)?(list[_\s-]?dir|read[_\s-]?file|write[_\s-]?file|edit[_\s-]?file|run[_\s-]?shell|code[_\s-]?search|sketch[_\s-]?board|test[_\s-]?runner|web[_\s-]?lookup)\b|\b\[(list_dir|read_file|write_file|edit_file|run_shell|code_search|sketch_board|test_runner|web_lookup)\]|\bTOOL:\s*(list_dir|read_file|write_file|edit_file|run_shell|code_search|sketch_board|test_runner|web_lookup)\b/gi;
 
 function normalizeToolId(raw: string): string {
   return raw.toLowerCase().replace(/[\s-]+/g, "_");
@@ -58,11 +69,11 @@ export function extractToolMentions(text: string): string[] {
 
 export function toolDisplay(id: string) {
   const known = KNOWN_TOOLS.find((t) => t.id === id);
-  const filesystem = FS_IDS.has(id);
+  const live = LIVE_IDS.has(id);
   return {
     id,
     label: known?.label ?? id,
-    status: filesystem ? ("allowlisted" as const) : ("not connected" as const),
+    status: live ? ("allowlisted" as const) : ("not connected" as const),
     hint: known?.hint ?? "Optional tool stub",
   };
 }

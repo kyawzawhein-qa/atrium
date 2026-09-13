@@ -11,8 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: file:./dev.db
-      ATRIUM_PASSWORD: ci
-      ATRIUM_SESSION_SECRET: ci-secret
     steps:
       - name: Checkout
         uses: actions/checkout@v4

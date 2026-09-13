@@ -13,20 +13,22 @@
   <img src="docs/github-social.png" alt="Atrium — self-hosted multi-agent studio" width="100%" />
 </p>
 
-Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https://github.com/kyawzawhein-qa). Define specialist agents, pick an OpenRouter model per agent, and optionally grant absolute filesystem paths so agents can list, read, write, and edit files — all on your machine, with a local SQLite database.
+Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https://github.com/kyawzawhein-qa). Define specialist agents, pick an OpenRouter model per agent, and optionally grant absolute filesystem paths (and shell) so agents can list, read, write, edit, and run allowlisted commands — all on your machine, with a local SQLite database. **Local-first: no login.**
 
 ## Why Atrium
 
 - **Your key, your models** — Paste an OpenRouter API key in Settings. Each agent chooses its own model. The key never lives in `.env` or git.
 - **Agents you own** — Name, description (system prompt), and model are first-class. Seeded demos are ordinary, deletable rows.
-- **Bounded computer access** — An explicit path allowlist gates `list_dir`, `read_file`, `write_file`, and `edit_file` on the server. Empty allowlist means tools are not granted.
+- **Bounded computer access** — An explicit path allowlist gates `list_dir`, `read_file`, `write_file`, `edit_file`, and optional `run_shell` on the server. Empty allowlist means tools are not granted.
+- **No login** — Open the studio and chat. Streaming replies via SSE; mutating shell commands ask for Approve / Deny.
 
 ## Features
 
 - **Custom agents** with per-agent OpenRouter models
+- **Streaming chat** (SSE: tokens + tool chips as they arrive)
 - **Path allowlist** for absolute paths (`list_dir`, `read_file`, `write_file`, `edit_file`)
+- **Optional shell** — Settings toggle “Allow shell in granted folders”; mutating commands need approval
 - **Local SQLite** via Prisma (settings, agents, threads, messages)
-- **Studio auth** — password gate with a signed JWT cookie (`ATRIUM_PASSWORD`)
 
 ## Quick start
 
@@ -37,39 +39,37 @@ npm run db:setup
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and sign in.
+Open [http://localhost:3000](http://localhost:3000) — redirects to `/chat`. No password.
 
-| Variable | Local default |
+| Variable | Purpose |
 | --- | --- |
-| `ATRIUM_PASSWORD` | `atrium` |
-
-Set `ATRIUM_SESSION_SECRET` for anything beyond a local demo.
+| `DATABASE_URL` | SQLite URL (default `file:./dev.db`) |
+| `ATRIUM_PUBLIC_URL` | Optional OpenRouter `HTTP-Referer` |
 
 > **Do not put your OpenRouter API key in `.env`.** Paste it in the app at **Settings**. It is stored in the SQLite Settings row and shown masked after save.
 
 ### First session
 
-1. Sign in with the studio password.
-2. Open **Settings** → paste your OpenRouter key → save.
-3. Create an agent (or edit a seeded one): name, description, model.
-4. Start a chat. Completions use that agent’s `modelId` via `https://openrouter.ai/api/v1`.
-5. Optionally grant absolute folders under the path allowlist.
+1. Open **Settings** → paste your OpenRouter key → save.
+2. Create an agent (or edit a seeded one): name, description, model.
+3. Start a chat. Completions stream from that agent’s `modelId` via `https://openrouter.ai/api/v1`.
+4. Optionally grant absolute folders under the path allowlist.
+5. Optionally enable **Allow shell in granted folders** for `run_shell` (mutating commands show Approve / Deny).
 
 ## Security notes
 
 - **Allowlist** — Tools run on the machine hosting Atrium. Only absolute paths are accepted. Traversal outside granted roots is rejected. An empty allowlist returns “not granted.”
-- **Key storage** — The OpenRouter key lives in SQLite, not environment files. Never commit `.env`, `*.db`, or keys.
-- **Auth** — Change `ATRIUM_PASSWORD` and `ATRIUM_SESSION_SECRET` for shared or production hosts. See [SECURITY.md](SECURITY.md).
+- **Shell** — Off by default. Dangerous patterns are hard-rejected. Mutating commands wait for operator approval (5-minute TTL).
+- **Key storage** — The OpenRouter key lives in SQLite, not environment files. Never commit `.env`, `*.db`, or keys. See [SECURITY.md](SECURITY.md).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Browser -->|JWT cookie| Proxy["src/proxy.ts"]
-  Proxy --> App["Next.js App Router"]
+  Browser --> App["Next.js App Router"]
   App --> SQLite[(Prisma / SQLite)]
-  App -->|chat completions| OpenRouter["OpenRouter API"]
-  App -->|list_dir / read_file / write_file / edit_file| FS["Server filesystem\n(allowlist)"]
+  App -->|streaming chat completions| OpenRouter["OpenRouter API"]
+  App -->|list_dir / read_file / write_file / edit_file / run_shell| FS["Server filesystem + shell\n(allowlist + approval)"]
 ```
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -6,11 +6,14 @@ import { useRouter } from "next/navigation";
 import { ThreadList, type ThreadSummary } from "./ThreadList";
 import { AgentSwitcher, type AgentSummary } from "./AgentSwitcher";
 import { MessageBubble, type UiMessage } from "./MessageBubble";
+import type { ToolChipData, ToolChipStatus } from "./ToolChip";
 
 type ThreadDetail = ThreadSummary & {
   messages: UiMessage[];
   agentId: string;
 };
+
+type LiveTool = ToolChipData;
 
 export function AppShell({
   initialThreadId,
@@ -28,6 +31,9 @@ export function AppShell({
   const [mobileNav, setMobileNav] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [streamingText, setStreamingText] = useState("");
+  const [liveTools, setLiveTools] = useState<LiveTool[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
   const loadAgents = useCallback(async () => {
     const res = await fetch("/api/agents");
@@ -129,6 +135,37 @@ export function AppShell({
     }
   }
 
+  function upsertLiveTool(entry: LiveTool) {
+    setLiveTools((prev) => {
+      const idx = prev.findIndex((t) => t.id === entry.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = entry;
+        return next;
+      }
+      return [...prev, entry];
+    });
+  }
+
+  async function decideApproval(approvalId: string, allow: boolean) {
+    setApprovalBusy(true);
+    try {
+      const res = await fetch("/api/tools/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approvalId, allow }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Approval failed");
+      }
+    } catch {
+      setError("Approval network error");
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
   async function sendMessage() {
     const text = draft.trim();
     if (!text || busy) return;
@@ -158,6 +195,8 @@ export function AppShell({
     setDraft("");
     setBusy(true);
     setError(null);
+    setStreamingText("");
+    setLiveTools([]);
 
     setDetail((prev) =>
       prev
@@ -176,29 +215,88 @@ export function AppShell({
     );
 
     try {
-      const res = await fetch(`/api/threads/${threadId}/messages`, {
+      const res = await fetch(`/api/threads/${threadId}/messages?stream=1`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
         body: JSON.stringify({ content: text }),
       });
-      const data = await res.json();
-      if (data.thread) {
-        setDetail(data.thread);
-      } else if (!res.ok) {
+
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
         setError(data.error || "Send failed");
+        setBusy(false);
+        return;
       }
-      await loadThreads();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assembled = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() ?? "";
+
+        for (const chunk of chunks) {
+          const line = chunk
+            .split("\n")
+            .map((l) => l.trim())
+            .find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = line.slice(5).trim();
+          let event: {
+            type: string;
+            text?: string;
+            message?: string;
+            id?: string;
+            name?: string;
+            status?: ToolChipStatus;
+            detail?: string;
+            approvalId?: string;
+            content?: string;
+            toolLog?: LiveTool[];
+            messageId?: string;
+          };
+          try {
+            event = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+
+          if (event.type === "token" && event.text) {
+            assembled += event.text;
+            setStreamingText(assembled);
+          } else if (event.type === "tool") {
+            upsertLiveTool({
+              id: event.id || event.name || "tool",
+              name: event.name || "tool",
+              status: event.status || "ran",
+              detail: event.detail,
+              approvalId: event.approvalId,
+            });
+          } else if (event.type === "error") {
+            setError(event.message || "Stream error");
+          } else if (event.type === "done") {
+            // Drop the live bubble before reloading so we do not flash duplicates.
+            setStreamingText("");
+            setLiveTools([]);
+            if (threadId) await loadThread(threadId);
+            await loadThreads();
+          }
+        }
+      }
     } catch {
       setError("Network error");
     } finally {
       setBusy(false);
+      setStreamingText("");
     }
-  }
-
-  async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/login");
-    router.refresh();
   }
 
   const agentSubtitle = activeAgent
@@ -209,6 +307,17 @@ export function AppShell({
         .filter(Boolean)
         .join(" · ")
     : "Pick an agent to begin";
+
+  const streamingMessage: UiMessage | null =
+    busy && (streamingText || liveTools.length > 0)
+      ? {
+          id: "streaming",
+          role: "assistant",
+          content: streamingText || (liveTools.length ? "…" : ""),
+          toolHints:
+            liveTools.length > 0 ? JSON.stringify(liveTools) : null,
+        }
+      : null;
 
   return (
     <div className="flex h-dvh overflow-hidden bg-ink-deep text-ink-foam">
@@ -269,13 +378,6 @@ export function AppShell({
           >
             Settings
           </Link>
-          <button
-            type="button"
-            onClick={() => void logout()}
-            className="rounded-lg border border-ink-line/80 px-2.5 py-1.5 text-[11px] uppercase tracking-wider text-ink-mist hover:text-ink-foam"
-          >
-            Sign out
-          </button>
         </header>
 
         {hasKey === false && (
@@ -298,7 +400,7 @@ export function AppShell({
                 <p className="mt-3 text-sm leading-relaxed text-ink-mist">
                   Choose an agent above, then start typing—or open a thread from
                   the left rail. Each specialist keeps their own voice, model,
-                  and brief.
+                  and brief. No login — local-first studio.
                 </p>
                 <button
                   type="button"
@@ -316,10 +418,23 @@ export function AppShell({
                 key={m.id}
                 message={m}
                 accent={detail.agent.accent}
+                onApprove={(id) => void decideApproval(id, true)}
+                onDeny={(id) => void decideApproval(id, false)}
+                approvalBusy={approvalBusy}
               />
             ))}
 
-            {busy && (
+            {streamingMessage && (
+              <MessageBubble
+                message={streamingMessage}
+                accent={detail?.agent.accent || activeAgent?.accent || "#5b8a9a"}
+                onApprove={(id) => void decideApproval(id, true)}
+                onDeny={(id) => void decideApproval(id, false)}
+                approvalBusy={approvalBusy}
+              />
+            )}
+
+            {busy && !streamingMessage && (
               <div className="text-sm text-ink-mist/80">
                 {activeAgent?.name || "Agent"} is composing…
               </div>
