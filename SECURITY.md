@@ -37,7 +37,8 @@ You can expect an acknowledgment when the report is reviewed. Please allow reaso
 
 - Off by default (`enableShell`). Requires a non-empty allowlist; cwd must resolve inside a granted folder.
 - Dangerous patterns (e.g. `rm -rf /`, `shutdown`, `curl | sh`) are always rejected.
-- Mutating commands require operator Approve / Deny (in-memory, 5-minute TTL).
+- Every command requires operator Approve / Deny (5-minute TTL). Pending approvals are stored in SQLite so a refresh or process restart does not drop an in-flight request.
+- `POST /api/tools/approve` requires same-origin proof and an httpOnly operator cookie (auto-issued when you open the studio). Cross-origin sites and unauthenticated API callers cannot approve shell commands.
 
 ### Database
 

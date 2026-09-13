@@ -11,6 +11,12 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { resolveIfAllowed } from "./fs-tools";
+import {
+  createStoredApproval,
+  expireStoredApproval,
+  getStoredPendingApproval,
+  markStoredApproval,
+} from "./shell-approval-store";
 import { getStudioSettings } from "./settings";
 
 const APPROVAL_TTL_MS = 5 * 60 * 1000;
@@ -149,13 +155,24 @@ function registerApproval(
   cwd: string
 ): { approvalId: string; result: Promise<ShellResult> } {
   const approvalId = newApprovalId();
+  const expiresAt = new Date(Date.now() + APPROVAL_TTL_MS);
   let finish: (result: ShellResult) => void = () => {};
   const result = new Promise<ShellResult>((resolve) => {
     finish = resolve;
   });
 
+  void createStoredApproval(approvalId, command, cwd, expiresAt).catch(() => {
+    finish({
+      ok: false,
+      error: "Could not persist shell approval.",
+      code: "failed",
+      approvalId,
+    });
+  });
+
   const timer = setTimeout(() => {
     const entry = approvals().get(approvalId);
+    void expireStoredApproval(approvalId);
     if (entry) {
       approvals().delete(approvalId);
       entry.finish({
@@ -196,33 +213,55 @@ export async function resolveShellApproval(
   | { ok: false; error: string }
 > {
   const entry = approvals().get(approvalId);
-  if (!entry) {
+  const stored = entry ? null : await getStoredPendingApproval(approvalId);
+
+  if (!entry && !stored) {
     return { ok: false, error: "Unknown or expired approval id." };
   }
 
+  const command = entry?.command ?? stored!.command;
+  const cwd = entry?.cwd ?? stored!.cwd;
+
   if (!allow) {
+    await markStoredApproval(approvalId, "denied");
     const denied: ShellResult = {
       ok: false,
       error: "Operator denied this shell command.",
       code: "denied",
       approvalId,
     };
-    entry.finish(denied);
+    if (entry) {
+      entry.finish(denied);
+    }
     return { ok: true, allowed: false };
   }
 
-  const { command, cwd, finish } = entry;
-  approvals().delete(approvalId);
-  clearTimeout(entry.timer);
+  if (entry) {
+    approvals().delete(approvalId);
+    clearTimeout(entry.timer);
+  }
+
+  await markStoredApproval(approvalId, "approved");
   const result = await execCommand(command, cwd);
-  finish(result);
+  await markStoredApproval(approvalId, "completed");
+  if (entry) {
+    entry.finish(result);
+  }
   return { ok: true, allowed: true, continued: false, result };
 }
 
-export function peekShellApproval(approvalId: string) {
+export async function peekShellApproval(approvalId: string) {
   const entry = approvals().get(approvalId);
-  if (!entry) return null;
-  return { command: entry.command, cwd: entry.cwd, createdAt: entry.createdAt };
+  if (entry) {
+    return { command: entry.command, cwd: entry.cwd, createdAt: entry.createdAt };
+  }
+  const stored = await getStoredPendingApproval(approvalId);
+  if (!stored) return null;
+  return {
+    command: stored.command,
+    cwd: stored.cwd,
+    createdAt: stored.createdAt.getTime(),
+  };
 }
 
 async function execCommand(

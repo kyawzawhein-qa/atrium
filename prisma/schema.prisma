@@ -15,7 +15,19 @@ model Settings {
   allowedPaths     String   @default("[]")
   /// When true and allowlist is non-empty, agents may use run_shell inside granted folders.
   enableShell      Boolean  @default(false)
+  /// Opaque secret for same-origin operator actions (shell approve/deny). Auto-generated.
+  operatorToken    String?
   updatedAt        DateTime @updatedAt
+}
+
+/// Durable pending shell approvals (survive process restart until TTL).
+model ShellApproval {
+  id        String   @id
+  command   String
+  cwd       String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  expiresAt DateTime
 }
 
 model Agent {
