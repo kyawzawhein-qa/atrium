@@ -125,10 +125,16 @@ function isDangerous(command: string): boolean {
   return DANGEROUS.some((re) => re.test(command.trim()));
 }
 
+function hasShellControl(command: string): boolean {
+  // Pipes, chaining, and redirects are never "just a read".
+  return /[|><;&`]|\$\(|&&|\|\|/.test(command);
+}
+
 function isMutating(command: string): boolean {
   const c = command.trim();
-  if (READISH.test(c)) return false;
-  return MUTATING.some((re) => re.test(c));
+  if (hasShellControl(c)) return true;
+  if (MUTATING.some((re) => re.test(c))) return true;
+  return false;
 }
 
 function newApprovalId(): string {

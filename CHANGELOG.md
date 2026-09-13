@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Phase 2 tool loop: SSE streaming chat (`token` / `tool` / `done` / `error`), structured tool log chips on assistant messages.
 - Allowlisted `run_shell` with Settings toggle (“Allow shell in granted folders”), hard-reject for dangerous commands, and Approve/Deny for mutating commands (`POST /api/tools/approve`).
+- Shell approval no longer skips commands that start with a read-ish verb but contain redirects/pipes (echo x > file).
 - Allowlisted `write_file` and `edit_file` tools (text files, 256KB cap, unique-match edit).
 
 ### Changed
