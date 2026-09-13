@@ -1,6 +1,8 @@
 /** Tool metadata + mention extraction. Filesystem tools are implemented in fs-tools.ts; shell in shell-tools.ts. */
 
-export const KNOWN_TOOLS = [
+import type { PluginToolMeta } from "./plugins/types";
+
+export const CORE_TOOLS = [
   {
     id: "list_dir",
     label: "List directory",
@@ -32,7 +34,7 @@ export const KNOWN_TOOLS = [
   { id: "web_lookup", label: "Web lookup", hint: "Fetch public reference notes" },
 ] as const;
 
-const LIVE_IDS = new Set([
+const CORE_LIVE_IDS = new Set([
   "list_dir",
   "read_file",
   "write_file",
@@ -40,8 +42,38 @@ const LIVE_IDS = new Set([
   "run_shell",
 ]);
 
-const TOOL_PATTERN =
+const CORE_TOOL_PATTERN =
   /\b(?:use|call|invoke|run)\s+(?:the\s+)?(list[_\s-]?dir|read[_\s-]?file|write[_\s-]?file|edit[_\s-]?file|run[_\s-]?shell|code[_\s-]?search|sketch[_\s-]?board|test[_\s-]?runner|web[_\s-]?lookup)\b|\b\[(list_dir|read_file|write_file|edit_file|run_shell|code_search|sketch_board|test_runner|web_lookup)\]|\bTOOL:\s*(list_dir|read_file|write_file|edit_file|run_shell|code_search|sketch_board|test_runner|web_lookup)\b/gi;
+
+/** Core + dynamically loaded plugin tools (see src/lib/plugins/). */
+export let KNOWN_TOOLS: ReadonlyArray<{
+  id: string;
+  label: string;
+  hint: string;
+}> = CORE_TOOLS;
+
+let liveToolIds = new Set<string>(CORE_LIVE_IDS);
+let mentionPattern = CORE_TOOL_PATTERN;
+
+export function registerPluginTools(metas: PluginToolMeta[]): void {
+  KNOWN_TOOLS = [
+    ...CORE_TOOLS,
+    ...metas.map((m) => ({ id: m.id, label: m.label, hint: m.hint })),
+  ];
+  liveToolIds = new Set([
+    ...CORE_LIVE_IDS,
+    ...metas.map((m) => m.id),
+  ]);
+  const pluginIds = metas.map((m) => m.id.replace(/_/g, "[_\\s-]?")).join("|");
+  if (pluginIds) {
+    mentionPattern = new RegExp(
+      `${CORE_TOOL_PATTERN.source}|\\b(?:use|call|invoke|run)\\s+(?:the\\s+)?(${pluginIds})\\b|\\b\\[(${pluginIds})\\]|\\bTOOL:\\s*(${pluginIds})\\b`,
+      CORE_TOOL_PATTERN.flags
+    );
+  } else {
+    mentionPattern = CORE_TOOL_PATTERN;
+  }
+}
 
 function normalizeToolId(raw: string): string {
   return raw.toLowerCase().replace(/[\s-]+/g, "_");
@@ -50,7 +82,7 @@ function normalizeToolId(raw: string): string {
 export function extractToolMentions(text: string): string[] {
   const found = new Set<string>();
   let match: RegExpExecArray | null;
-  const re = new RegExp(TOOL_PATTERN.source, TOOL_PATTERN.flags);
+  const re = new RegExp(mentionPattern.source, mentionPattern.flags);
   while ((match = re.exec(text)) !== null) {
     const raw = match[1] || match[2] || match[3];
     if (raw) found.add(normalizeToolId(raw));
@@ -69,7 +101,7 @@ export function extractToolMentions(text: string): string[] {
 
 export function toolDisplay(id: string) {
   const known = KNOWN_TOOLS.find((t) => t.id === id);
-  const live = LIVE_IDS.has(id);
+  const live = liveToolIds.has(id);
   return {
     id,
     label: known?.label ?? id,

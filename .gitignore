@@ -45,5 +45,9 @@ next-env.d.ts
 prisma/*.db
 prisma/*.db-journal
 
+# demo artifacts (workspace folder is allowlisted during demo)
+/demo-workspace/*
+!/demo-workspace/.gitkeep
+
 # keep example env tracked
 !.env.example
