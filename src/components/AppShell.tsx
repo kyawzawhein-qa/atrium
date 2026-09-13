@@ -57,6 +57,10 @@ export function AppShell({
     setHasKey(Boolean(data.settings?.hasKey));
   }, []);
 
+  const bootstrapOperatorSession = useCallback(async () => {
+    await fetch("/api/operator/session", { credentials: "include" });
+  }, []);
+
   const loadThread = useCallback(async (id: string) => {
     const res = await fetch(`/api/threads/${id}`);
     if (!res.ok) {
@@ -72,7 +76,8 @@ export function AppShell({
     void loadAgents();
     void loadThreads();
     void loadSettings();
-  }, [loadAgents, loadThreads, loadSettings]);
+    void bootstrapOperatorSession();
+  }, [loadAgents, loadThreads, loadSettings, bootstrapOperatorSession]);
 
   useEffect(() => {
     if (activeId) {
@@ -152,6 +157,7 @@ export function AppShell({
     try {
       const res = await fetch("/api/tools/approve", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approvalId, allow }),
       });

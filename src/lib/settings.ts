@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { prisma } from "./prisma";
 
 export const SETTINGS_ID = "singleton";
@@ -41,6 +42,19 @@ export async function getOrCreateSettings() {
       enableShell: false,
     },
   });
+}
+
+/** Per-install secret for same-origin operator actions; created once in SQLite. */
+export async function ensureOperatorToken(): Promise<string> {
+  const row = await getOrCreateSettings();
+  if (row.operatorToken) return row.operatorToken;
+
+  const token = randomBytes(32).toString("hex");
+  const updated = await prisma.settings.update({
+    where: { id: SETTINGS_ID },
+    data: { operatorToken: token },
+  });
+  return updated.operatorToken ?? token;
 }
 
 export async function getStudioSettings(): Promise<StudioSettings> {

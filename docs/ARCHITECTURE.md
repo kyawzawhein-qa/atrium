@@ -24,7 +24,8 @@ There is no password gate, JWT session, or `/login` route. `/` redirects to `/ch
 | `GET/POST /api/threads`, thread/message subroutes | Chat persistence; messages support SSE |
 | `GET /api/openrouter/models` | Proxied OpenRouter model list (uses saved key) |
 | `POST /api/tools` | `list_dir` / `read_file` / `write_file` / `edit_file` against allowlist |
-| `POST /api/tools/approve` | Approve / deny pending `run_shell` mutations |
+| `GET /api/operator/session` | Issue httpOnly operator cookie (same-origin shell approvals) |
+| `POST /api/tools/approve` | Approve / deny pending `run_shell` (requires operator cookie + same-origin) |
 
 ## Data model (Prisma / SQLite)
 
@@ -33,6 +34,10 @@ Settings (id = "singleton")
   openrouterApiKey?
   allowedPaths          // JSON string array of absolute paths
   enableShell           // default false
+  operatorToken?        // auto-generated; backs httpOnly approval cookie
+
+ShellApproval
+  id, command, cwd, status, expiresAt   // durable pending shell approvals
 
 Agent
   slug, name, title?, description, modelId, modelName, accent
@@ -60,6 +65,6 @@ Message
 | --- | --- |
 | OpenRouter client | `src/lib/openrouter.ts`, `src/lib/llm.ts` |
 | Filesystem tools | `src/lib/fs-tools.ts`, `src/lib/tools.ts` |
-| Shell + approval | `src/lib/shell-tools.ts`, `src/app/api/tools/approve/route.ts` |
+| Shell + approval | `src/lib/shell-tools.ts`, `src/lib/shell-approval-store.ts`, `src/lib/operator-auth.ts`, `src/app/api/tools/approve/route.ts` |
 | Settings access | `src/lib/settings.ts` |
 | Schema / seed | `prisma/schema.prisma`, `prisma/seed.ts` |
