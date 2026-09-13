@@ -6,6 +6,7 @@ export type StudioSettings = {
   id: string;
   openrouterApiKey: string | null;
   allowedPaths: string[];
+  enableShell: boolean;
   updatedAt: Date;
 };
 
@@ -37,6 +38,7 @@ export async function getOrCreateSettings() {
     create: {
       id: SETTINGS_ID,
       allowedPaths: "[]",
+      enableShell: false,
     },
   });
 }
@@ -47,6 +49,7 @@ export async function getStudioSettings(): Promise<StudioSettings> {
     id: row.id,
     openrouterApiKey: row.openrouterApiKey,
     allowedPaths: parseAllowedPaths(row.allowedPaths),
+    enableShell: Boolean(row.enableShell),
     updatedAt: row.updatedAt,
   };
 }
@@ -57,6 +60,7 @@ export function publicSettingsPayload(settings: StudioSettings) {
     hasKey: key.length > 0,
     keyMasked: key ? maskApiKey(key) : "",
     allowedPaths: settings.allowedPaths,
+    enableShell: settings.enableShell,
     updatedAt: settings.updatedAt,
   };
 }

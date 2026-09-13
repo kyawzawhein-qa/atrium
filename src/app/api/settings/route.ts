@@ -25,6 +25,7 @@ export async function PATCH(req: NextRequest) {
     addPath?: string;
     removePath?: string;
     clearKey?: boolean;
+    enableShell?: boolean;
   };
   try {
     body = await req.json();
@@ -76,7 +77,11 @@ export async function PATCH(req: NextRequest) {
     allowed = allowed.filter((p) => p !== body.removePath);
   }
 
-  const data: { openrouterApiKey?: string | null; allowedPaths: string } = {
+  const data: {
+    openrouterApiKey?: string | null;
+    allowedPaths: string;
+    enableShell?: boolean;
+  } = {
     allowedPaths: JSON.stringify(allowed),
   };
 
@@ -87,6 +92,10 @@ export async function PATCH(req: NextRequest) {
     if (next) {
       data.openrouterApiKey = next;
     }
+  }
+
+  if (typeof body.enableShell === "boolean") {
+    data.enableShell = body.enableShell;
   }
 
   await prisma.settings.update({

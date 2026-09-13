@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { executeFsTool } from "@/lib/fs-tools";
+import { runShellTool } from "@/lib/shell-tools";
 
-const ALLOWED = new Set(["list_dir", "read_file", "write_file", "edit_file"]);
+const FS_ALLOWED = new Set(["list_dir", "read_file", "write_file", "edit_file"]);
 
 export async function POST(req: NextRequest) {
   let body: {
@@ -11,6 +12,8 @@ export async function POST(req: NextRequest) {
     old_string?: string;
     new_string?: string;
     replace_all?: boolean;
+    command?: string;
+    cwd?: string;
   };
   try {
     body = await req.json();
@@ -19,9 +22,29 @@ export async function POST(req: NextRequest) {
   }
 
   const tool = body.tool?.trim() || "";
-  if (!ALLOWED.has(tool)) {
+
+  if (tool === "run_shell") {
+    const result = await runShellTool({
+      command: body.command,
+      cwd: body.cwd || body.path,
+    });
+    const rec = result as { ok?: boolean; code?: string };
+    const status = rec.ok
+      ? 200
+      : rec.code === "not_granted" || rec.code === "outside_allowlist"
+        ? 403
+        : rec.code === "needs_approval"
+          ? 202
+          : 400;
+    return NextResponse.json(result, { status });
+  }
+
+  if (!FS_ALLOWED.has(tool)) {
     return NextResponse.json(
-      { error: "tool must be list_dir, read_file, write_file, or edit_file" },
+      {
+        error:
+          "tool must be list_dir, read_file, write_file, edit_file, or run_shell",
+      },
       { status: 400 }
     );
   }

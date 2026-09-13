@@ -6,6 +6,7 @@ type PublicSettings = {
   hasKey: boolean;
   keyMasked: string;
   allowedPaths: string[];
+  enableShell: boolean;
 };
 
 export function SettingsForm() {
@@ -193,6 +194,45 @@ export function SettingsForm() {
             Add path
           </button>
         </form>
+      </section>
+
+      <section className="space-y-4 rounded-3xl border border-ink-line/60 bg-ink-panel/50 p-6">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-ink-mist">
+            Shell access
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-ink-mist/80">
+            When enabled, agents may call <code className="text-coastal">run_shell</code>{" "}
+            with cwd inside a granted folder. Read-ish commands run immediately;
+            every command asks for Approve /
+            Deny in the chat. Dangerous patterns are always rejected. Requires a
+            non-empty allowlist.
+          </p>
+        </div>
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-ink-line/70 bg-ink-deep/50 px-4 py-3">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 accent-[var(--coastal,#5b8a9a)]"
+            checked={settings.enableShell}
+            disabled={busy}
+            onChange={(e) =>
+              void patch(
+                { enableShell: e.target.checked },
+                e.target.checked
+                  ? "Shell enabled in granted folders."
+                  : "Shell disabled."
+              )
+            }
+          />
+          <span>
+            <span className="block text-sm font-medium text-ink-foam">
+              Allow shell in granted folders
+            </span>
+            <span className="mt-1 block text-xs text-ink-mist/70">
+              Default off. Local-first — commands run on this server, not in your browser.
+            </span>
+          </span>
+        </label>
       </section>
 
       {error && (
