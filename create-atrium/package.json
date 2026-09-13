@@ -1,0 +1,28 @@
+{
+  "name": "create-atrium",
+  "version": "0.1.0",
+  "description": "Bootstrap a local Atrium studio without manual cloning",
+  "license": "MIT",
+  "author": "Kyaw Zaw Hein",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kyawzawhein-qa/atrium.git",
+    "directory": "create-atrium"
+  },
+  "bugs": {
+    "url": "https://github.com/kyawzawhein-qa/atrium/issues"
+  },
+  "homepage": "https://github.com/kyawzawhein-qa/atrium#readme",
+  "type": "module",
+  "bin": {
+    "create-atrium": "./index.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.mjs",
+    "parse-args.mjs",
+    "bootstrap.mjs"
+  ]
+}
