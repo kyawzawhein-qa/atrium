@@ -8,14 +8,28 @@ import { loadPluginsFromDir } from "./loader";
 
 let cached: LoadedPlugin[] | null = null;
 let loadPromise: Promise<LoadedPlugin[]> | null = null;
+let loadOverride: typeof loadPluginsFromDir | null = null;
+
+function resolveLoader(): typeof loadPluginsFromDir {
+  return loadOverride ?? loadPluginsFromDir;
+}
+
+function beginPluginLoad(rootDir?: string): Promise<LoadedPlugin[]> {
+  return resolveLoader()(rootDir)
+    .then((plugins) => {
+      cached = plugins;
+      return plugins;
+    })
+    .catch((err) => {
+      loadPromise = null;
+      throw err;
+    });
+}
 
 export async function getLoadedPlugins(): Promise<LoadedPlugin[]> {
   if (cached) return cached;
   if (!loadPromise) {
-    loadPromise = loadPluginsFromDir().then((plugins) => {
-      cached = plugins;
-      return plugins;
-    });
+    loadPromise = beginPluginLoad();
   }
   return loadPromise;
 }
@@ -23,12 +37,16 @@ export async function getLoadedPlugins(): Promise<LoadedPlugin[]> {
 /** Test helper — point the loader at a temp directory and clear cache. */
 export function resetPluginCache(rootDir?: string): void {
   cached = null;
-  loadPromise = rootDir
-    ? loadPluginsFromDir(rootDir).then((plugins) => {
-        cached = plugins;
-        return plugins;
-      })
-    : null;
+  loadPromise = rootDir ? beginPluginLoad(rootDir) : null;
+}
+
+/** @internal Test hook — substitute plugin directory loader. */
+export function __setPluginLoadOverride(
+  fn: typeof loadPluginsFromDir | null
+): void {
+  loadOverride = fn;
+  cached = null;
+  loadPromise = null;
 }
 
 export async function getPluginPromptAddendum(): Promise<string> {

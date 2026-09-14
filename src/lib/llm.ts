@@ -192,6 +192,23 @@ export function getToolDefinitionNames(opts: BuildToolDefsOpts): string[] {
   return (buildToolDefs(opts) ?? []).map((d) => d.function.name);
 }
 
+const AGENT_COLLAB_MARKERS =
+  /\b(mara(?:\s+chen)?|theo(?:\s+rios)?|imani(?:\s+brooks)?|senior[- ]?developer|graphic[- ]?designer|qa[- ]?automation)\b/i;
+
+/** Test helper: user wants to reach another named Atrium specialist. */
+export function detectCollaborationIntent(text: string): boolean {
+  if (!AGENT_COLLAB_MARKERS.test(text)) return false;
+  const t = text.toLowerCase();
+  return (
+    /\b(talk|speak|chat)\s+(to|with)\b/.test(t) ||
+    /\b(collaborate|work)\s+with\b/.test(t) ||
+    /\bask\s+(mara|theo|imani|the\s+)/.test(t) ||
+    /\b(reach|message|contact|consult)\b/.test(t) ||
+    /\bhand\s*off\s+to\b/.test(t) ||
+    /\banother\s+(agent|specialist)\b/.test(t)
+  );
+}
+
 function detectFsIntent(text: string): "write" | "edit" | "read" | "list" | null {
   const t = text.toLowerCase();
   if (
@@ -611,11 +628,18 @@ export async function generateAssistantReply(opts: {
   const wantStream = Boolean(opts.streamTokens && emit);
 
   for (let round = 0; round < maxRounds; round++) {
-    const intent = detectFsIntent(opts.userText);
-    const forceTools =
+    const fsIntent = detectFsIntent(opts.userText);
+    const wantsCollaboration = detectCollaborationIntent(opts.userText);
+    const forceFsTools =
       toolsGranted &&
       round === 0 &&
-      (intent === "write" || intent === "edit");
+      (fsIntent === "write" || fsIntent === "edit");
+    const forceCollabTools =
+      messageAgentEnabled &&
+      Boolean(toolDefs) &&
+      round === 0 &&
+      wantsCollaboration;
+    const forceTools = forceFsTools || forceCollabTools;
 
     // Stream when we expect a plain answer, or on the final synthesis round.
     // Tool rounds may still stream; tokens are suppressed once tool_calls appear.
@@ -642,7 +666,7 @@ export async function generateAssistantReply(opts: {
 
     if (toolCalls.length === 0) {
       const refusedWrite =
-        forceTools &&
+        forceFsTools &&
         /cannot create|limited to reading|cannot write|can't create|can't write|read-only/i.test(
           text
         );
