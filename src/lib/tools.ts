@@ -28,6 +28,11 @@ export const CORE_TOOLS = [
     label: "Shell",
     hint: "Run an allowlisted shell command (mutating needs approval)",
   },
+  {
+    id: "message_agent",
+    label: "Message agent",
+    hint: "Send a brief to another Atrium agent and receive their reply",
+  },
   { id: "code_search", label: "Code search", hint: "Scan a workspace for symbols" },
   { id: "sketch_board", label: "Sketch board", hint: "Draft layout frames" },
   { id: "test_runner", label: "Test runner", hint: "Execute a suite dry-run" },
@@ -40,10 +45,11 @@ const CORE_LIVE_IDS = new Set([
   "write_file",
   "edit_file",
   "run_shell",
+  "message_agent",
 ]);
 
 const CORE_TOOL_PATTERN =
-  /\b(?:use|call|invoke|run)\s+(?:the\s+)?(list[_\s-]?dir|read[_\s-]?file|write[_\s-]?file|edit[_\s-]?file|run[_\s-]?shell|code[_\s-]?search|sketch[_\s-]?board|test[_\s-]?runner|web[_\s-]?lookup)\b|\b\[(list_dir|read_file|write_file|edit_file|run_shell|code_search|sketch_board|test_runner|web_lookup)\]|\bTOOL:\s*(list_dir|read_file|write_file|edit_file|run_shell|code_search|sketch_board|test_runner|web_lookup)\b/gi;
+  /\b(?:use|call|invoke|run)\s+(?:the\s+)?(list[_\s-]?dir|read[_\s-]?file|write[_\s-]?file|edit[_\s-]?file|run[_\s-]?shell|message[_\s-]?agent|code[_\s-]?search|sketch[_\s-]?board|test[_\s-]?runner|web[_\s-]?lookup)\b|\b\[(list_dir|read_file|write_file|edit_file|run_shell|message_agent|code_search|sketch_board|test_runner|web_lookup)\]|\bTOOL:\s*(list_dir|read_file|write_file|edit_file|run_shell|message_agent|code_search|sketch_board|test_runner|web_lookup)\b/gi;
 
 /** Core + dynamically loaded plugin tools (see src/lib/plugins/). */
 export let KNOWN_TOOLS: ReadonlyArray<{
