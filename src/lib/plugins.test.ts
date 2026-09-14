@@ -5,7 +5,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadPluginsFromDir } from "./plugins/loader";
 import {
+  __setPluginLoadOverride,
   executePluginTool,
+  getLoadedPlugins,
   getPluginPromptAddendum,
   getPluginToolMetas,
   resetPluginCache,
@@ -84,6 +86,60 @@ test("loads manifest-only and module-backed plugins from a directory", async () 
   assert.deepEqual(result, { ok: true, pong: true });
 
   await rm(root, { recursive: true, force: true });
+  resetPluginCache();
+  resetPluginInit();
+});
+
+test("broken plugin module keeps manifest and skips tools", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "atrium-plug-broken-"));
+  const broken = path.join(root, "broken-module");
+  await mkdir(broken);
+  await writeFile(
+    path.join(broken, "plugin.json"),
+    JSON.stringify({
+      id: "broken-module",
+      name: "Broken module",
+      description: "Manifest loads even when the module throws",
+      promptAddendum: "Broken module prompt still applies.",
+    })
+  );
+  await writeFile(
+    path.join(broken, "index.mjs"),
+    `throw new Error("plugin init failed");`
+  );
+
+  const plugins = await loadPluginsFromDir(root);
+  assert.equal(plugins.length, 1);
+  assert.equal(plugins[0].id, "broken-module");
+  assert.match(plugins[0].promptAddendum || "", /Broken module prompt/);
+  assert.equal(plugins[0].tools, undefined);
+
+  resetPluginCache(root);
+  resetPluginInit();
+  const metas = await getPluginToolMetas();
+  assert.equal(metas.length, 0);
+  const addendum = await getPluginPromptAddendum();
+  assert.match(addendum, /Broken module prompt/);
+
+  await rm(root, { recursive: true, force: true });
+  resetPluginCache();
+  resetPluginInit();
+});
+
+test("getLoadedPlugins does not cache a rejected load promise", async () => {
+  let attempts = 0;
+  __setPluginLoadOverride(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("transient plugin load failure");
+    return [];
+  });
+  resetPluginCache();
+
+  await assert.rejects(getLoadedPlugins(), /transient plugin load failure/);
+  await assert.doesNotReject(getLoadedPlugins());
+  assert.equal(attempts, 2);
+
+  __setPluginLoadOverride(null);
   resetPluginCache();
   resetPluginInit();
 });

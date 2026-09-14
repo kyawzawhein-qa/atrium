@@ -3,6 +3,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AtriumPlugin, AtriumPluginManifest, LoadedPlugin } from "./types";
 
+/** Runtime-only import — avoids Next/Turbopack/webpack resolving file:// plugin paths. */
+async function runtimeImportModule(
+  modPath: string
+): Promise<Record<string, unknown>> {
+  const specifier = pathToFileURL(modPath).href;
+  const load = new Function(
+    "specifier",
+    "return import(specifier)"
+  ) as (specifier: string) => Promise<Record<string, unknown>>;
+  return load(specifier);
+}
+
 const MANIFEST = "plugin.json";
 const DEV_MODULE_CANDIDATES = ["index.mjs", "index.js", "index.ts"] as const;
 const PROD_MODULE_CANDIDATES = ["index.mjs"] as const;
@@ -58,15 +70,23 @@ async function loadModuleTools(sourceDir: string): Promise<AtriumPlugin["tools"]
     } catch {
       continue;
     }
-    const mod = (await import(pathToFileURL(modPath).href)) as {
-      default?: AtriumPlugin;
-      plugin?: AtriumPlugin;
-      tools?: AtriumPlugin["tools"];
-    };
-    const plugin = mod.default ?? mod.plugin;
-    if (plugin?.tools?.length) return plugin.tools;
-    if (mod.tools?.length) return mod.tools;
-    return undefined;
+    try {
+      const mod = (await runtimeImportModule(modPath)) as {
+        default?: AtriumPlugin;
+        plugin?: AtriumPlugin;
+        tools?: AtriumPlugin["tools"];
+      };
+      const plugin = mod.default ?? mod.plugin;
+      if (plugin?.tools?.length) return plugin.tools;
+      if (mod.tools?.length) return mod.tools;
+      return undefined;
+    } catch (err) {
+      console.warn(
+        `[atrium/plugins] Skipping tools from ${modPath}:`,
+        err instanceof Error ? err.message : err
+      );
+      return undefined;
+    }
   }
   return undefined;
 }
