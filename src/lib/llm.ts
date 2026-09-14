@@ -6,6 +6,11 @@
 import { extractToolMentions } from "./tools";
 import { executeFsTool } from "./fs-tools";
 import {
+  executeMessageAgent,
+  messageAgentDetail,
+  messageAgentToolDefinition,
+} from "./message-agent-tool";
+import {
   runShellWithApprovalGate,
   runShellTool,
   shellToolDefinition,
@@ -152,14 +157,39 @@ const FS_TOOLS = [
   },
 ];
 
-function buildToolDefs(
-  shellGranted: boolean,
-  pluginDefs: Awaited<
-    ReturnType<typeof getPluginContext>
-  >["toolDefinitions"] = []
-) {
-  const base = shellGranted ? [...FS_TOOLS, shellToolDefinition()] : FS_TOOLS;
-  return pluginDefs.length > 0 ? [...base, ...pluginDefs] : base;
+type BuildToolDefsOpts = {
+  fsGranted: boolean;
+  shellGranted: boolean;
+  pluginDefs?: Awaited<ReturnType<typeof getPluginContext>>["toolDefinitions"];
+  messageAgentEnabled?: boolean;
+};
+
+type OpenRouterToolDef = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+function buildToolDefs(opts: BuildToolDefsOpts): OpenRouterToolDef[] | undefined {
+  const defs: OpenRouterToolDef[] = [];
+  if (opts.messageAgentEnabled !== false) {
+    defs.push(messageAgentToolDefinition());
+  }
+  if (opts.fsGranted) {
+    defs.push(...(FS_TOOLS as OpenRouterToolDef[]));
+    if (opts.shellGranted) defs.push(shellToolDefinition());
+    const pluginDefs = opts.pluginDefs ?? [];
+    if (pluginDefs.length > 0) defs.push(...(pluginDefs as OpenRouterToolDef[]));
+  }
+  return defs.length > 0 ? defs : undefined;
+}
+
+/** Test helper: tool names exposed to the model for a given grant profile. */
+export function getToolDefinitionNames(opts: BuildToolDefsOpts): string[] {
+  return (buildToolDefs(opts) ?? []).map((d) => d.function.name);
 }
 
 function detectFsIntent(text: string): "write" | "edit" | "read" | "list" | null {
@@ -183,13 +213,26 @@ function buildSystemPrompt(
   agent: AgentVoice,
   toolsGranted: boolean,
   shellGranted: boolean,
-  pluginAddendum = ""
+  pluginAddendum = "",
+  messageAgentEnabled = true
 ): string {
   const persona = agent.description.trim() || `You are ${agent.name}, an Atrium specialist.`;
+  const interAgent =
+    messageAgentEnabled !== false
+      ? [
+          "You can reach another Atrium specialist with message_agent — pass their slug or name and a concise brief.",
+          "They reply in their own persona and model; summarize their answer for the user.",
+          "Other agents include Mara Chen (senior-developer), Theo Rios (graphic-designer), and Imani Brooks (qa-automation).",
+        ].join(" ")
+      : "";
   let tools: string;
   if (!toolsGranted) {
-    tools =
-      "Filesystem tools are not granted. The operator has not added any allowed computer paths. Do not claim you can read, write, or list files.";
+    tools = [
+      "Filesystem tools are not granted. The operator has not added any allowed computer paths. Do not claim you can read, write, or list files.",
+      interAgent,
+    ]
+      .filter(Boolean)
+      .join(" ");
   } else {
     const names = shellGranted
       ? "list_dir, read_file, write_file, edit_file, and run_shell"
@@ -203,6 +246,7 @@ function buildSystemPrompt(
         : "",
       "Use absolute paths only. If a path is outside the allowlist, report the tool error honestly.",
       "After a successful write or edit, confirm the path in one short sentence.",
+      interAgent,
     ]
       .filter(Boolean)
       .join(" ");
@@ -426,6 +470,8 @@ function parseToolArgs(raw?: string): {
   replace_all?: boolean;
   command?: string;
   cwd?: string;
+  agent?: string;
+  brief?: string;
 } {
   if (!raw) return {};
   try {
@@ -438,16 +484,30 @@ function parseToolArgs(raw?: string): {
       replace_all: parsed.replace_all === true,
       command: typeof parsed.command === "string" ? parsed.command : undefined,
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
+      agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
+      brief: typeof parsed.brief === "string" ? parsed.brief : undefined,
     };
   } catch {
     return {};
   }
 }
 
+async function runAgentBrief(target: AgentVoice, brief: string): Promise<{ content: string }> {
+  const reply = await generateAssistantReply({
+    agent: target,
+    history: [],
+    userText: brief,
+    messageAgentEnabled: false,
+    streamTokens: false,
+  });
+  return { content: reply.content };
+}
+
 async function executeOneTool(
   name: string,
   args: ReturnType<typeof parseToolArgs>,
   opts: {
+    fromAgent: AgentVoice;
     toolsGranted?: boolean;
     stream?: boolean;
     onNeedsApproval?: (info: {
@@ -457,6 +517,13 @@ async function executeOneTool(
     }) => void;
   }
 ): Promise<unknown> {
+  if (name === "message_agent") {
+    return executeMessageAgent(
+      { agent: args.agent, brief: args.brief },
+      { fromAgent: opts.fromAgent },
+      runAgentBrief
+    );
+  }
   if (name === "run_shell") {
     if (opts.stream && opts.onNeedsApproval) {
       return runShellWithApprovalGate(
@@ -491,6 +558,8 @@ export async function generateAssistantReply(opts: {
   userText: string;
   onEvent?: (event: StreamEvent) => void;
   streamTokens?: boolean;
+  /** Nested agent runs disable message_agent to avoid chains. */
+  messageAgentEnabled?: boolean;
 }): Promise<LlmResult> {
   await ensurePluginsLoaded();
   const settings = await getStudioSettings();
@@ -512,15 +581,20 @@ export async function generateAssistantReply(opts: {
   }
 
   const model = modelId || "openai/gpt-4o-mini";
+  const messageAgentEnabled = opts.messageAgentEnabled !== false;
   const system = buildSystemPrompt(
     opts.agent,
     toolsGranted,
     shellGranted,
-    pluginContext.promptAddendum
+    pluginContext.promptAddendum,
+    messageAgentEnabled
   );
-  const toolDefs = toolsGranted
-    ? buildToolDefs(shellGranted, pluginContext.toolDefinitions)
-    : undefined;
+  const toolDefs = buildToolDefs({
+    fsGranted: toolsGranted,
+    shellGranted,
+    pluginDefs: pluginContext.toolDefinitions,
+    messageAgentEnabled,
+  });
 
   type OrMsg = Record<string, unknown>;
   const messages: OrMsg[] = [
@@ -600,6 +674,7 @@ export async function generateAssistantReply(opts: {
       const args = parseToolArgs(call.function?.arguments);
 
       const result = await executeOneTool(name, args, {
+        fromAgent: opts.agent,
         toolsGranted,
         stream: wantStream,
         onNeedsApproval: (info) => {
@@ -623,11 +698,17 @@ export async function generateAssistantReply(opts: {
       });
 
       const status = statusFromResult(result);
+      const detail =
+        name === "message_agent"
+          ? messageAgentDetail(
+              result as Parameters<typeof messageAgentDetail>[0]
+            )
+          : shortDetail(result);
       const entry: ToolLogEntry = {
         id: logId,
         name: name || "tool",
         status,
-        detail: shortDetail(result),
+        detail,
         approvalId:
           status === "needs_approval"
             ? (result as { approvalId?: string }).approvalId
