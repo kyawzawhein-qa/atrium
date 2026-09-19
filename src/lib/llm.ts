@@ -34,6 +34,7 @@ export type ToolLogEntry = {
   status: "ran" | "denied" | "error" | "needs_approval";
   detail: string;
   approvalId?: string;
+  truncated?: boolean;
 };
 
 export type LlmResult = {
@@ -62,6 +63,7 @@ export type StreamEvent =
       status: ToolLogEntry["status"];
       detail: string;
       approvalId?: string;
+      truncated?: boolean;
     }
   | { type: "done"; messageId?: string; toolLog: ToolLogEntry[]; content: string }
   | { type: "error"; message: string };
@@ -308,9 +310,27 @@ type ChatChoice = {
   finish_reason?: string;
 };
 
-function shortDetail(result: unknown): string {
+export function toolResultDetail(result: unknown, toolName?: string): string {
+  const rec = result as {
+    ok?: boolean;
+    path?: string;
+    bytes?: number;
+    truncated?: boolean;
+    content?: string;
+  };
+
+  if (toolName === "read_file" && rec?.ok === true && typeof rec.path === "string") {
+    const size =
+      typeof rec.bytes === "number" ? `${rec.bytes.toLocaleString()} bytes` : "read";
+    return rec.truncated ? `${rec.path} · ${size} · truncated` : `${rec.path} · ${size}`;
+  }
+
   try {
-    const s = JSON.stringify(result);
+    const sanitized =
+      rec && typeof rec === "object" && "content" in rec
+        ? { ...rec, content: "[omitted]" }
+        : result;
+    const s = JSON.stringify(sanitized);
     return s.length > 180 ? s.slice(0, 177) + "…" : s;
   } catch {
     return String(result).slice(0, 180);
@@ -727,7 +747,11 @@ export async function generateAssistantReply(opts: {
           ? messageAgentDetail(
               result as Parameters<typeof messageAgentDetail>[0]
             )
-          : shortDetail(result);
+          : toolResultDetail(result, name);
+      const truncated =
+        name === "read_file" &&
+        (result as { ok?: boolean; truncated?: boolean }).ok === true &&
+        (result as { truncated?: boolean }).truncated === true;
       const entry: ToolLogEntry = {
         id: logId,
         name: name || "tool",
@@ -737,6 +761,7 @@ export async function generateAssistantReply(opts: {
           status === "needs_approval"
             ? (result as { approvalId?: string }).approvalId
             : undefined,
+        truncated: truncated || undefined,
       };
       upsertLog(toolLog, entry);
       emit?.({
@@ -746,6 +771,7 @@ export async function generateAssistantReply(opts: {
         status: entry.status,
         detail: entry.detail,
         approvalId: entry.approvalId,
+        truncated: entry.truncated,
       });
 
       messages.push({

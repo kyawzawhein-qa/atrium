@@ -157,7 +157,16 @@ export function SettingsForm() {
         </div>
 
         {settings.allowedPaths.length === 0 ? (
-          <p className="text-sm text-ink-mist/70">No paths granted yet.</p>
+          <div className="space-y-2 rounded-xl border border-dashed border-ink-line/60 bg-ink-deep/40 px-4 py-3 text-sm text-ink-mist/80">
+            <p>No paths granted yet. Add an absolute folder on the server, for example:</p>
+            <ul className="list-disc space-y-1 pl-5 font-mono text-xs text-ink-foam/90">
+              <li>/home/you/project</li>
+              <li>C:\Users\you\Documents\project</li>
+            </ul>
+            <p className="text-xs text-ink-mist/70">
+              Relative paths (e.g. <code className="text-coastal">./src</code>) are rejected.
+            </p>
+          </div>
         ) : (
           <ul className="space-y-2">
             {settings.allowedPaths.map((p) => (
@@ -183,7 +192,7 @@ export function SettingsForm() {
           <input
             value={pathDraft}
             onChange={(e) => setPathDraft(e.target.value)}
-            placeholder="/home/you/project or C:/Users/you/Documents"
+            placeholder="/home/you/project — C:\Users\you\Documents\project"
             className="min-w-0 flex-1 rounded-xl border border-ink-line bg-ink-deep/80 px-3 py-2.5 text-sm text-ink-foam outline-none ring-coastal/40 placeholder:text-ink-mist/40 focus:ring-2"
           />
           <button

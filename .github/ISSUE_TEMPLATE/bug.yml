@@ -1,0 +1,72 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please do **not** paste API keys or other secrets.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead.
+      placeholder: Clear and concise description.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. macOS 14, Ubuntu 22.04, Windows 11
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node -v`
+      placeholder: e.g. v20.11.0
+    validations:
+      required: true
+  - type: textarea
+    id: npm_test
+    attributes:
+      label: npm test result
+      description: Paste the output of `npm test`, or note if tests could not be run.
+    validations:
+      required: true
+  - type: dropdown
+    id: allowlist
+    attributes:
+      label: Path allowlist
+      options:
+        - Empty (no paths granted)
+        - One or more paths granted
+    validations:
+      required: true
+  - type: dropdown
+    id: shell
+    attributes:
+      label: Shell access enabled?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Relevant error output (redact secrets).

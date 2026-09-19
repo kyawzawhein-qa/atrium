@@ -325,6 +325,7 @@ export function AppShell({
             status?: ToolChipStatus;
             detail?: string;
             approvalId?: string;
+            truncated?: boolean;
             content?: string;
             toolLog?: LiveTool[];
             messageId?: string;
@@ -345,6 +346,7 @@ export function AppShell({
               status: event.status || "ran",
               detail: event.detail,
               approvalId: event.approvalId,
+              truncated: event.truncated,
             });
           } else if (event.type === "error") {
             setError(event.message || "Stream error");
