@@ -8,8 +8,11 @@ import { executeFsTool } from "./fs-tools";
 import {
   executeMessageAgent,
   messageAgentDetail,
+  messageAgentPendingDetail,
   messageAgentToolDefinition,
+  MESSAGE_AGENT_TOOL_ID,
 } from "./message-agent-tool";
+import { ensureSeedAgents } from "./seed-agents";
 import {
   runShellWithApprovalGate,
   runShellTool,
@@ -31,7 +34,7 @@ export type ChatMessage = {
 export type ToolLogEntry = {
   id: string;
   name: string;
-  status: "ran" | "denied" | "error" | "needs_approval";
+  status: "ran" | "denied" | "error" | "needs_approval" | "running";
   detail: string;
   approvalId?: string;
 };
@@ -197,15 +200,25 @@ const AGENT_COLLAB_MARKERS =
 
 /** Test helper: user wants to reach another named Atrium specialist. */
 export function detectCollaborationIntent(text: string): boolean {
-  if (!AGENT_COLLAB_MARKERS.test(text)) return false;
   const t = text.toLowerCase();
+  const namesAnotherAgent = AGENT_COLLAB_MARKERS.test(text);
+  const genericHandoff =
+    /\banother\s+(agent|specialist)\b/.test(t) ||
+    /\b(different|other)\s+agent\b/.test(t);
+
+  if (!namesAnotherAgent && !genericHandoff) return false;
+
   return (
     /\b(talk|speak|chat)\s+(to|with)\b/.test(t) ||
     /\b(collaborate|work)\s+with\b/.test(t) ||
     /\bask\s+(mara|theo|imani|the\s+)/.test(t) ||
     /\b(reach|message|contact|consult)\b/.test(t) ||
     /\bhand\s*off\s+to\b/.test(t) ||
-    /\banother\s+(agent|specialist)\b/.test(t)
+    /\b(loop|bring|get)\s+(in\s+)?(mara|theo|imani)\b/.test(t) ||
+    /\bhave\s+(mara|theo|imani)\b/.test(t) ||
+    /\bget\s+(mara|theo|imani)(?:'s|s)?\s+(input|take|feedback|review)\b/.test(t) ||
+    /\b(mara|theo|imani)\s+(to\s+)?(review|check|look|weigh\s+in)\b/.test(t) ||
+    genericHandoff
   );
 }
 
@@ -325,12 +338,18 @@ function statusFromResult(result: unknown): ToolLogEntry["status"] {
   return "error";
 }
 
+type ToolChoice =
+  | "auto"
+  | "required"
+  | "none"
+  | { type: "function"; function: { name: string } };
+
 async function callOpenRouter(opts: {
   apiKey: string;
   model: string;
   messages: unknown[];
   tools?: ReturnType<typeof buildToolDefs>;
-  toolChoice?: "auto" | "required" | "none";
+  toolChoice?: ToolChoice;
 }): Promise<ChatChoice> {
   const body: Record<string, unknown> = {
     model: opts.model,
@@ -365,7 +384,7 @@ async function streamOpenRouter(opts: {
   model: string;
   messages: unknown[];
   tools?: ReturnType<typeof buildToolDefs>;
-  toolChoice?: "auto" | "required" | "none";
+  toolChoice?: ToolChoice;
   onToken?: (text: string) => void;
 }): Promise<ChatChoice> {
   const body: Record<string, unknown> = {
@@ -515,6 +534,7 @@ async function runAgentBrief(target: AgentVoice, brief: string): Promise<{ conte
     history: [],
     userText: brief,
     messageAgentEnabled: false,
+    nestingDepth: 1,
     streamTokens: false,
   });
   return { content: reply.content };
@@ -575,10 +595,13 @@ export async function generateAssistantReply(opts: {
   userText: string;
   onEvent?: (event: StreamEvent) => void;
   streamTokens?: boolean;
-  /** Nested agent runs disable message_agent to avoid chains. */
+  /** Nested agent runs disable message_agent to avoid chains (1-hop only). */
   messageAgentEnabled?: boolean;
+  /** Depth of nested message_agent calls; depth >= 1 disables further handoffs. */
+  nestingDepth?: number;
 }): Promise<LlmResult> {
   await ensurePluginsLoaded();
+  await ensureSeedAgents();
   const settings = await getStudioSettings();
   const apiKey = settings.openrouterApiKey?.trim() || "";
   const toolsGranted = settings.allowedPaths.length > 0;
@@ -598,7 +621,9 @@ export async function generateAssistantReply(opts: {
   }
 
   const model = modelId || "openai/gpt-4o-mini";
-  const messageAgentEnabled = opts.messageAgentEnabled !== false;
+  const nestingDepth = opts.nestingDepth ?? 0;
+  const messageAgentEnabled =
+    opts.messageAgentEnabled !== false && nestingDepth < 1;
   const system = buildSystemPrompt(
     opts.agent,
     toolsGranted,
@@ -633,13 +658,18 @@ export async function generateAssistantReply(opts: {
     const forceFsTools =
       toolsGranted &&
       round === 0 &&
-      (fsIntent === "write" || fsIntent === "edit");
+      (fsIntent === "write" || fsIntent === "edit") &&
+      !wantsCollaboration;
     const forceCollabTools =
       messageAgentEnabled &&
       Boolean(toolDefs) &&
       round === 0 &&
       wantsCollaboration;
-    const forceTools = forceFsTools || forceCollabTools;
+    const toolChoice: ToolChoice = forceCollabTools
+      ? { type: "function", function: { name: MESSAGE_AGENT_TOOL_ID } }
+      : forceFsTools
+        ? "required"
+        : "auto";
 
     // Stream when we expect a plain answer, or on the final synthesis round.
     // Tool rounds may still stream; tokens are suppressed once tool_calls appear.
@@ -649,7 +679,7 @@ export async function generateAssistantReply(opts: {
           model,
           messages,
           tools: toolDefs,
-          toolChoice: forceTools ? "required" : "auto",
+          toolChoice,
           onToken: (text) => emit?.({ type: "token", text }),
         })
       : await callOpenRouter({
@@ -657,7 +687,7 @@ export async function generateAssistantReply(opts: {
           model,
           messages,
           tools: toolDefs,
-          toolChoice: forceTools ? "required" : "auto",
+          toolChoice,
         });
 
     const msg = choice.message;
@@ -675,6 +705,19 @@ export async function generateAssistantReply(opts: {
           role: "user",
           content:
             "That refusal is wrong. Call write_file or edit_file now with an absolute path inside the allowlist. Do not apologize. Do not explain limitations.",
+        });
+        continue;
+      }
+      const refusedCollab =
+        forceCollabTools &&
+        /cannot reach|can't reach|cannot contact|can't contact|unable to (reach|contact)|don't have access to other agents|do not have access to other agents|cannot message other|can't message other/i.test(
+          text
+        );
+      if (refusedCollab && round === 0) {
+        messages.push({
+          role: "user",
+          content:
+            "That refusal is wrong. Call message_agent now with the target agent slug or name and a concise brief. Do not apologize. Do not claim you cannot reach other agents.",
         });
         continue;
       }
@@ -696,6 +739,24 @@ export async function generateAssistantReply(opts: {
       const name = call.function?.name || "";
       const logId = call.id || `tool_${toolLog.length}`;
       const args = parseToolArgs(call.function?.arguments);
+
+      if (name === MESSAGE_AGENT_TOOL_ID) {
+        const pendingDetail = await messageAgentPendingDetail(args.agent);
+        const pendingEntry: ToolLogEntry = {
+          id: logId,
+          name: MESSAGE_AGENT_TOOL_ID,
+          status: "running",
+          detail: pendingDetail,
+        };
+        upsertLog(toolLog, pendingEntry);
+        emit?.({
+          type: "tool",
+          id: pendingEntry.id,
+          name: pendingEntry.name,
+          status: pendingEntry.status,
+          detail: pendingEntry.detail,
+        });
+      }
 
       const result = await executeOneTool(name, args, {
         fromAgent: opts.agent,

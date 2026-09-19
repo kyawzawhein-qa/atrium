@@ -30,7 +30,7 @@ export const CORE_TOOLS = [
   },
   {
     id: "message_agent",
-    label: "Message agent",
+    label: "Agent handoff",
     hint: "Send a brief to another Atrium agent and receive their reply",
   },
   { id: "code_search", label: "Code search", hint: "Scan a workspace for symbols" },

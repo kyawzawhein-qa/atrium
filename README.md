@@ -28,6 +28,7 @@ Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https:/
 - **Streaming chat** (SSE: tokens + tool chips as they arrive)
 - **Path allowlist** for absolute paths (`list_dir`, `read_file`, `write_file`, `edit_file`)
 - **Optional shell** — Settings toggle “Allow shell in granted folders”; every command needs approval
+- **Agent handoffs** — `message_agent` lets one specialist consult another (1-hop; visible handoff chip in chat)
 - **Local SQLite** via Prisma (settings, agents, threads, messages)
 
 ## Quick start
@@ -83,6 +84,14 @@ npm run dev
 3. Start a chat. Completions stream from that agent’s `modelId` via `https://openrouter.ai/api/v1`.
 4. Optionally grant absolute folders under the path allowlist.
 5. Optionally enable **Allow shell in granted folders** for `run_shell` (every command shows Approve / Deny).
+
+### Inter-agent orchestration (dogfood)
+
+With an OpenRouter key configured, open a chat with **Theo Rios** (graphic designer) and ask something like:
+
+> Ask Mara to review the API shape for the hero section.
+
+Theo should call `message_agent`, you will see an **Agent handoff** chip (`→ Mara Chen (senior-developer): …`) while Mara answers in her own persona, then Theo summarizes for you. Handoffs are **one hop only** — nested agents cannot chain further `message_agent` calls. Seeded personas are refreshed automatically on server start; run `npm run db:seed` manually if you want to force an upsert.
 
 ### 45-second demo
 
