@@ -6,7 +6,7 @@ Thanks for helping improve Atrium. This guide keeps contributions focused, revie
 
 ```bash
 npm install
-cp .env.example .env
+cp .env.example .env          # Windows (PowerShell): Copy-Item .env.example .env
 npm run db:setup
 npm run dev
 ```
@@ -21,6 +21,7 @@ Open [http://localhost:3000](http://localhost:3000) — local-first, no login (`
 | --- | --- |
 | `npm run dev` | Local development server |
 | `npm run lint` | ESLint |
+| `npm test` | Unit tests (lib + create-atrium) |
 | `npm run build` | Production build |
 | `npm run db:setup` | Generate Prisma client, push schema, seed |
 
@@ -29,7 +30,7 @@ Open [http://localhost:3000](http://localhost:3000) — local-first, no login (`
 1. Fork the repository (or create a branch if you have write access).
 2. Create a focused branch from `main`, e.g. `feat/path-allowlist-ux` or `fix/stream-tokens`.
 3. Keep changes scoped to one concern.
-4. Run `npm run lint` and `npm run build` before opening a PR.
+4. Run `npm test`, `npm run lint`, and `npm run build` before opening a PR.
 5. Open a pull request against `main` using the PR template.
 6. Describe what changed, why, and how you verified it.
 

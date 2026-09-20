@@ -32,6 +32,7 @@ function parseHints(raw?: string | null): ToolChipData[] {
             detail: typeof rec.detail === "string" ? rec.detail : undefined,
             approvalId:
               typeof rec.approvalId === "string" ? rec.approvalId : undefined,
+            truncated: rec.truncated === true,
           };
         }
         return null;
