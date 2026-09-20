@@ -24,6 +24,10 @@ Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https:/
 
 ## Features
 
+<p align="center">
+  <img src="docs/chat-tools-screenshot.png" alt="Atrium chat with a tool chip and Approve / Deny bar for shell approval" width="720" />
+</p>
+
 - **Custom agents** with per-agent OpenRouter models
 - **Streaming chat** (SSE: tokens + tool chips as they arrive)
 - **Path allowlist** for absolute paths (`list_dir`, `read_file`, `write_file`, `edit_file`)
@@ -65,7 +69,7 @@ Open [http://localhost:3000](http://localhost:3000) — redirects to `/chat`. No
 git clone https://github.com/kyawzawhein-qa/atrium.git
 cd atrium
 npm install
-cp .env.example .env
+cp .env.example .env          # Windows (PowerShell): Copy-Item .env.example .env
 npm run db:setup
 npm run dev
 ```
@@ -105,6 +109,7 @@ Third-party extensions live in [`plugins/`](plugins/) — drop in a folder with 
 
 - **Allowlist** — Tools run on the machine hosting Atrium. Only absolute paths are accepted. Traversal outside granted roots is rejected. An empty allowlist returns “not granted.”
 - **Shell** — Off by default. Dangerous patterns are hard-rejected. Every command waits for operator approval (5-minute TTL).
+- **Operator session** — Approve / Deny for shell commands requires a same-origin browser session and an httpOnly operator cookie (issued automatically when you open the studio). Bind Atrium to **localhost** (the default dev server) or put authentication in front of a reverse proxy on shared machines — anyone who can open the UI is treated as the operator. See [SECURITY.md](SECURITY.md) for the full threat model.
 - **Key storage** — The OpenRouter key lives in SQLite, not environment files. Never commit `.env`, `*.db`, or keys. See [SECURITY.md](SECURITY.md).
 
 ## Architecture

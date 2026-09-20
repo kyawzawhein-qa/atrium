@@ -15,6 +15,7 @@ export type ToolChipData = {
   status?: ToolChipStatus;
   detail?: string;
   approvalId?: string;
+  truncated?: boolean;
 };
 
 const STATUS_DOT: Record<ToolChipStatus, string> = {
@@ -39,6 +40,7 @@ export function ToolChip({
   status,
   detail,
   approvalId,
+  truncated,
   onApprove,
   onDeny,
   busy,
@@ -58,6 +60,8 @@ export function ToolChip({
         ? detail
         : `→ ${detail}`
       : null;
+  const showTruncated =
+    truncated || (name === "read_file" && detail?.includes("truncated"));
 
   return (
     <span
@@ -74,21 +78,26 @@ export function ToolChip({
           {handoffDetail}
         </span>
       )}
+      {showTruncated && (
+        <span className="opacity-80">· truncated</span>
+      )}
       {showApproval && (
         <span className="ml-1 inline-flex gap-1">
           <button
             type="button"
             disabled={busy}
+            aria-label="Approve shell command"
             onClick={() => approvalId && onApprove?.(approvalId)}
-            className="rounded-full bg-coastal/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-deep hover:bg-coastal-bright disabled:opacity-40"
+            className="rounded-full bg-coastal/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-deep hover:bg-coastal-bright focus:outline-none focus-visible:ring-2 focus-visible:ring-coastal-bright focus-visible:ring-offset-1 focus-visible:ring-offset-ink-panel disabled:opacity-40"
           >
             Approve
           </button>
           <button
             type="button"
             disabled={busy}
+            aria-label="Deny shell command"
             onClick={() => approvalId && onDeny?.(approvalId)}
-            className="rounded-full border border-ink-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-mist hover:text-ink-foam disabled:opacity-40"
+            className="rounded-full border border-ink-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-mist hover:text-ink-foam focus:outline-none focus-visible:ring-2 focus-visible:ring-coastal/70 focus-visible:ring-offset-1 focus-visible:ring-offset-ink-panel disabled:opacity-40"
           >
             Deny
           </button>
