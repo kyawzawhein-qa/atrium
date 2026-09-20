@@ -4,6 +4,7 @@ import { createTestDb } from "./test-db";
 import {
   executeMessageAgent,
   messageAgentDetail,
+  messageAgentPendingDetail,
   resolveTargetAgent,
   type RunAgentBrief,
 } from "./message-agent-tool";
@@ -35,7 +36,27 @@ async function seedAgents() {
       modelName: "Claude",
     },
   });
-  return { a, b };
+  const mara = await prisma.agent.create({
+    data: {
+      slug: "senior-developer",
+      name: "Mara Chen",
+      title: "Senior Developer",
+      description: "Engineer persona",
+      modelId: "openai/gpt-4o-mini",
+      modelName: "Mini",
+    },
+  });
+  const theo = await prisma.agent.create({
+    data: {
+      slug: "graphic-designer",
+      name: "Theo Rios",
+      title: "Graphic Designer",
+      description: "Design persona",
+      modelId: "openai/gpt-4o-mini",
+      modelName: "Mini",
+    },
+  });
+  return { a, b, mara, theo };
 }
 
 before(async () => {
@@ -68,6 +89,34 @@ test("happy path: brief is delivered to target agent voice", async () => {
   assert.match(messageAgentDetail(result), /→ Agent Beta/);
 });
 
+test("Theo → Mara handoff resolves first names and slugs", async () => {
+  let targetSlug = "";
+  const runBrief: RunAgentBrief = async (target) => {
+    targetSlug = target.slug;
+    return { content: "Mara says: ship the API first." };
+  };
+
+  const byFirstName = await executeMessageAgent(
+    { agent: "Mara", brief: "What should we build first?" },
+    {
+      fromAgent: { name: "Theo Rios", slug: "graphic-designer", description: "Design" },
+    },
+    runBrief
+  );
+  assert.equal(byFirstName.ok, true);
+  assert.equal(targetSlug, "senior-developer");
+
+  const bySlug = await executeMessageAgent(
+    { agent: "senior-developer", brief: "Quick architecture check." },
+    {
+      fromAgent: { name: "Theo Rios", slug: "graphic-designer", description: "Design" },
+    },
+    runBrief
+  );
+  assert.equal(bySlug.ok, true);
+  assert.match(messageAgentDetail(bySlug), /→ Mara Chen \(senior-developer\)/);
+});
+
 test("refuses unknown agent", async () => {
   const result = await executeMessageAgent(
     { agent: "no-such-agent", brief: "hello" },
@@ -93,13 +142,23 @@ test("refuses messaging self", async () => {
   if (!result.ok) assert.equal(result.code, "self");
 });
 
-test("resolveTargetAgent matches slug, id, or name", async () => {
+test("resolveTargetAgent matches slug, id, name, first name, title, and aliases", async () => {
   const { prisma } = await import("./prisma");
   const b = await prisma.agent.findUniqueOrThrow({ where: { slug: "agent-b" } });
 
   assert.equal((await resolveTargetAgent("agent-b"))?.slug, "agent-b");
   assert.equal((await resolveTargetAgent(b.id))?.slug, "agent-b");
   assert.equal((await resolveTargetAgent("Agent Beta"))?.slug, "agent-b");
+  assert.equal((await resolveTargetAgent("Mara"))?.slug, "senior-developer");
+  assert.equal((await resolveTargetAgent("theo"))?.slug, "graphic-designer");
+  assert.equal((await resolveTargetAgent("Senior Developer"))?.slug, "senior-developer");
+  assert.equal((await resolveTargetAgent("graphic designer"))?.slug, "graphic-designer");
+  assert.equal((await resolveTargetAgent("graphic_designer"))?.slug, "graphic-designer");
+});
+
+test("messageAgentPendingDetail shows target while nested run is in flight", async () => {
+  const detail = await messageAgentPendingDetail("Mara");
+  assert.match(detail, /→ Mara Chen \(senior-developer\): consulting/);
 });
 
 test("nested agent run does not expose message_agent (no chain inheritance)", () => {
@@ -119,6 +178,15 @@ test("nested agent run does not expose message_agent (no chain inheritance)", ()
   assert.ok(!calleeTools.includes("message_agent"));
   assert.ok(calleeTools.includes("read_file"));
   assert.ok(calleeTools.includes("run_shell"));
+});
+
+test("message_agent is available without filesystem grants", () => {
+  const tools = getToolDefinitionNames({
+    fsGranted: false,
+    shellGranted: false,
+    messageAgentEnabled: true,
+  });
+  assert.deepEqual(tools, ["message_agent"]);
 });
 
 test("message_agent result does not leak tool grants to caller", async () => {

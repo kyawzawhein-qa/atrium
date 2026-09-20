@@ -21,6 +21,22 @@ test("detectCollaborationIntent matches named agent handoff requests", () => {
     detectCollaborationIntent("Reach senior-developer about the migration plan."),
     true
   );
+  assert.equal(
+    detectCollaborationIntent("Have Mara review the migration plan."),
+    true
+  );
+  assert.equal(
+    detectCollaborationIntent("Loop in Theo for the hero section."),
+    true
+  );
+  assert.equal(
+    detectCollaborationIntent("Get Imani's input on the checkout tests."),
+    true
+  );
+  assert.equal(
+    detectCollaborationIntent("Ask another specialist about the color palette."),
+    true
+  );
 });
 
 test("detectCollaborationIntent ignores unrelated prompts", () => {
@@ -30,7 +46,7 @@ test("detectCollaborationIntent ignores unrelated prompts", () => {
 });
 
 test("seed personas tell specialists to use message_agent", () => {
-  const seedPath = path.join(process.cwd(), "prisma", "seed.ts");
+  const seedPath = path.join(process.cwd(), "src", "lib", "seed-agents.ts");
   const seed = readFileSync(seedPath, "utf8");
 
   for (const slug of ["senior-developer", "graphic-designer", "qa-automation"]) {

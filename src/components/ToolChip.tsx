@@ -2,7 +2,12 @@
 
 import { toolDisplay } from "@/lib/tools";
 
-export type ToolChipStatus = "ran" | "denied" | "error" | "needs_approval";
+export type ToolChipStatus =
+  | "ran"
+  | "denied"
+  | "error"
+  | "needs_approval"
+  | "running";
 
 export type ToolChipData = {
   id: string;
@@ -18,6 +23,7 @@ const STATUS_DOT: Record<ToolChipStatus, string> = {
   error: "bg-rose-400",
   needs_approval: "bg-amber-400",
   denied: "bg-ink-mist/60",
+  running: "bg-sky-400 animate-pulse",
 };
 
 const STATUS_RING: Record<ToolChipStatus, string> = {
@@ -25,6 +31,7 @@ const STATUS_RING: Record<ToolChipStatus, string> = {
   error: "border-rose-400/40 text-rose-200",
   needs_approval: "border-amber-400/40 text-amber-100",
   denied: "border-ink-line/60 text-ink-mist",
+  running: "border-sky-400/40 text-sky-100",
 };
 
 export function ToolChip({
@@ -46,17 +53,31 @@ export function ToolChip({
   const resolved: ToolChipStatus = status ?? "ran";
   const showApproval =
     resolved === "needs_approval" && approvalId && (onApprove || onDeny);
+  const isHandoff = (name || id) === "message_agent";
+  const handoffDetail =
+    isHandoff && detail
+      ? detail.startsWith("→")
+        ? detail
+        : `→ ${detail}`
+      : null;
   const showTruncated =
     truncated || (name === "read_file" && detail?.includes("truncated"));
 
   return (
     <span
-      className={`inline-flex flex-wrap items-center gap-1.5 rounded-full border bg-ink-panel/80 px-2.5 py-1 text-[11px] tracking-wide ${STATUS_RING[resolved]}`}
+      className={`inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border bg-ink-panel/80 px-2.5 py-1 text-[11px] tracking-wide ${STATUS_RING[resolved]}`}
       title={detail || `${tool.hint} — ${resolved}`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[resolved]}`} />
-      <span className="font-medium text-ink-foam">{tool.label}</span>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[resolved]}`} />
+      <span className="font-medium text-ink-foam">
+        {isHandoff ? "Agent handoff" : tool.label}
+      </span>
       <span className="opacity-80">· {resolved.replace("_", " ")}</span>
+      {handoffDetail && (
+        <span className="basis-full truncate font-normal opacity-90 sm:basis-auto">
+          {handoffDetail}
+        </span>
+      )}
       {showTruncated && (
         <span className="opacity-80">· truncated</span>
       )}
