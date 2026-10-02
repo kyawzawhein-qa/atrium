@@ -7,7 +7,8 @@ export type ToolChipStatus =
   | "denied"
   | "error"
   | "needs_approval"
-  | "running";
+  | "running"
+  | "queued";
 
 export type ToolChipData = {
   id: string;
@@ -24,6 +25,7 @@ const STATUS_DOT: Record<ToolChipStatus, string> = {
   needs_approval: "bg-amber-400",
   denied: "bg-ink-mist/60",
   running: "bg-sky-400 animate-pulse",
+  queued: "bg-violet-400 animate-pulse",
 };
 
 const STATUS_RING: Record<ToolChipStatus, string> = {
@@ -32,6 +34,7 @@ const STATUS_RING: Record<ToolChipStatus, string> = {
   needs_approval: "border-amber-400/40 text-amber-100",
   denied: "border-ink-line/60 text-ink-mist",
   running: "border-sky-400/40 text-sky-100",
+  queued: "border-violet-400/40 text-violet-100",
 };
 
 export function ToolChip({

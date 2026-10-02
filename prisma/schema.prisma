@@ -66,3 +66,30 @@ model Message {
   toolHints String?
   createdAt DateTime @default(now())
 }
+
+/// Async agent-to-agent inbox (phase 1). threadId groups a multi-hop chain.
+model AgentMessage {
+  id              String   @id @default(cuid())
+  fromAgentSlug   String
+  toAgentSlug     String
+  /// Shared id for an entire handoff chain (A→B→C).
+  threadId        String
+  parentMessageId String?
+  hopCount        Int      @default(1)
+  body            String
+  /// JSON array placeholder for phase-2 attachments.
+  attachments     String   @default("[]")
+  status          String   @default("queued")
+  error           String?
+  /// Reply text when status is done (also copied to sender thread as agent_reply).
+  reply           String?
+  /// Sender chat thread to append agent_reply / tool updates.
+  senderThreadId  String?
+  senderToolLogId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([threadId])
+  @@index([fromAgentSlug, createdAt])
+}

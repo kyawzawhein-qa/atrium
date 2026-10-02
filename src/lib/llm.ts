@@ -11,7 +11,11 @@ import {
   messageAgentPendingDetail,
   messageAgentToolDefinition,
   MESSAGE_AGENT_TOOL_ID,
+  toolStatusForMessageAgentResult,
+  type AgentMessageChainContext,
 } from "./message-agent-tool";
+import { awaitAgentMessageDispatches } from "./agent-message-dispatcher";
+import { getMaxAgentMessageHops } from "./agent-message-config";
 import { ensureSeedAgents } from "./seed-agents";
 import {
   runShellWithApprovalGate,
@@ -34,10 +38,11 @@ export type ChatMessage = {
 export type ToolLogEntry = {
   id: string;
   name: string;
-  status: "ran" | "denied" | "error" | "needs_approval" | "running";
+  status: "ran" | "denied" | "error" | "needs_approval" | "running" | "queued";
   detail: string;
   approvalId?: string;
   truncated?: boolean;
+  agentMessageId?: string;
 };
 
 export type LlmResult = {
@@ -350,8 +355,13 @@ export function toolResultDetail(result: unknown, toolName?: string): string {
   }
 }
 
-function statusFromResult(result: unknown): ToolLogEntry["status"] {
-  const rec = result as { ok?: boolean; code?: string };
+function statusFromResult(result: unknown, toolName?: string): ToolLogEntry["status"] {
+  const rec = result as { ok?: boolean; code?: string; queued?: boolean };
+  if (toolName === MESSAGE_AGENT_TOOL_ID && rec?.ok === true) {
+    return toolStatusForMessageAgentResult(
+      result as Parameters<typeof toolStatusForMessageAgentResult>[0]
+    );
+  }
   if (rec && rec.ok === true) return "ran";
   if (rec?.code === "needs_approval") return "needs_approval";
   if (rec?.code === "denied") return "denied";
@@ -528,6 +538,7 @@ function parseToolArgs(raw?: string): {
   cwd?: string;
   agent?: string;
   brief?: string;
+  wait?: boolean;
 } {
   if (!raw) return {};
   try {
@@ -542,19 +553,23 @@ function parseToolArgs(raw?: string): {
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
       agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
       brief: typeof parsed.brief === "string" ? parsed.brief : undefined,
+      wait: parsed.wait === true,
     };
   } catch {
     return {};
   }
 }
 
-async function runAgentBrief(target: AgentVoice, brief: string): Promise<{ content: string }> {
+async function runAgentBrief(
+  target: AgentVoice,
+  brief: string,
+  chain: AgentMessageChainContext
+): Promise<{ content: string }> {
   const reply = await generateAssistantReply({
     agent: target,
     history: [],
     userText: brief,
-    messageAgentEnabled: false,
-    nestingDepth: 1,
+    agentMessageChain: chain,
     streamTokens: false,
   });
   return { content: reply.content };
@@ -567,6 +582,10 @@ async function executeOneTool(
     fromAgent: AgentVoice;
     toolsGranted?: boolean;
     stream?: boolean;
+    senderThreadId?: string;
+    senderToolLogId?: string;
+    agentMessageChain?: AgentMessageChainContext;
+    inboundAgentMessageId?: string;
     onNeedsApproval?: (info: {
       approvalId: string;
       command: string;
@@ -576,8 +595,14 @@ async function executeOneTool(
 ): Promise<unknown> {
   if (name === "message_agent") {
     return executeMessageAgent(
-      { agent: args.agent, brief: args.brief },
-      { fromAgent: opts.fromAgent },
+      { agent: args.agent, brief: args.brief, wait: args.wait },
+      {
+        fromAgent: opts.fromAgent,
+        senderThreadId: opts.senderThreadId,
+        senderToolLogId: opts.senderToolLogId,
+        chain: opts.agentMessageChain,
+        inboundAgentMessageId: opts.inboundAgentMessageId,
+      },
       runAgentBrief
     );
   }
@@ -615,10 +640,10 @@ export async function generateAssistantReply(opts: {
   userText: string;
   onEvent?: (event: StreamEvent) => void;
   streamTokens?: boolean;
-  /** Nested agent runs disable message_agent to avoid chains (1-hop only). */
   messageAgentEnabled?: boolean;
-  /** Depth of nested message_agent calls; depth >= 1 disables further handoffs. */
-  nestingDepth?: number;
+  agentMessageChain?: AgentMessageChainContext;
+  inboundAgentMessageId?: string;
+  senderThreadId?: string;
 }): Promise<LlmResult> {
   await ensurePluginsLoaded();
   await ensureSeedAgents();
@@ -641,9 +666,10 @@ export async function generateAssistantReply(opts: {
   }
 
   const model = modelId || "openai/gpt-4o-mini";
-  const nestingDepth = opts.nestingDepth ?? 0;
+  const hopCount = opts.agentMessageChain?.hopCount ?? 0;
+  const maxHops = getMaxAgentMessageHops();
   const messageAgentEnabled =
-    opts.messageAgentEnabled !== false && nestingDepth < 1;
+    opts.messageAgentEnabled !== false && hopCount < maxHops;
   const system = buildSystemPrompt(
     opts.agent,
     toolsGranted,
@@ -668,6 +694,7 @@ export async function generateAssistantReply(opts: {
   ];
 
   const toolLog: ToolLogEntry[] = [];
+  const pendingAgentMessageIds: string[] = [];
   const maxRounds = toolDefs ? 4 : 1;
   let finalContent = "";
   const wantStream = Boolean(opts.streamTokens && emit);
@@ -782,6 +809,10 @@ export async function generateAssistantReply(opts: {
         fromAgent: opts.agent,
         toolsGranted,
         stream: wantStream,
+        senderThreadId: opts.senderThreadId,
+        senderToolLogId: logId,
+        agentMessageChain: opts.agentMessageChain,
+        inboundAgentMessageId: opts.inboundAgentMessageId,
         onNeedsApproval: (info) => {
           const entry: ToolLogEntry = {
             id: logId,
@@ -802,7 +833,7 @@ export async function generateAssistantReply(opts: {
         },
       });
 
-      const status = statusFromResult(result);
+      const status = statusFromResult(result, name);
       const detail =
         name === "message_agent"
           ? messageAgentDetail(
@@ -813,11 +844,19 @@ export async function generateAssistantReply(opts: {
         name === "read_file" &&
         (result as { ok?: boolean; truncated?: boolean }).ok === true &&
         (result as { truncated?: boolean }).truncated === true;
+      const queuedId =
+        name === MESSAGE_AGENT_TOOL_ID &&
+        (result as { ok?: boolean; queued?: boolean }).ok === true &&
+        (result as { queued?: boolean }).queued === true
+          ? (result as { messageId: string }).messageId
+          : undefined;
+      if (queuedId) pendingAgentMessageIds.push(queuedId);
       const entry: ToolLogEntry = {
         id: logId,
         name: name || "tool",
         status,
         detail,
+        agentMessageId: queuedId,
         approvalId:
           status === "needs_approval"
             ? (result as { approvalId?: string }).approvalId
@@ -861,6 +900,34 @@ export async function generateAssistantReply(opts: {
 
   if (!finalContent) {
     finalContent = "(empty response)";
+  }
+
+  if (pendingAgentMessageIds.length > 0) {
+    await awaitAgentMessageDispatches(pendingAgentMessageIds, (update) => {
+      const chipStatus =
+        update.status === "done"
+          ? "ran"
+          : update.status === "failed"
+            ? "error"
+            : update.status === "running"
+              ? "running"
+              : "queued";
+      for (const entry of toolLog) {
+        if (entry.agentMessageId !== update.messageId) continue;
+        entry.status = chipStatus as ToolLogEntry["status"];
+        if (update.detail) entry.detail = update.detail;
+        if (update.error && update.status === "failed") {
+          entry.detail = update.error.slice(0, 180);
+        }
+        emit?.({
+          type: "tool",
+          id: entry.id,
+          name: entry.name,
+          status: entry.status,
+          detail: entry.detail,
+        });
+      }
+    });
   }
 
   const hintIds = Array.from(

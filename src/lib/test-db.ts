@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +27,7 @@ function resetPrismaSingleton(): void {
 export function createTestDb(): TestDb {
   resetPrismaSingleton();
   const dir = mkdtempSync(path.join(os.tmpdir(), "atrium-test-"));
-  const dbPath = path.join(dir, "test.db");
+  const dbPath = path.join(dir, `test-${randomUUID()}.db`);
   const url = `file:${dbPath}`;
   process.env.DATABASE_URL = url;
   execSync("npx prisma db push --skip-generate", {
@@ -39,7 +40,12 @@ export function createTestDb(): TestDb {
     url,
     cleanup: () => {
       resetPrismaSingleton();
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EBUSY" && code !== "EPERM") throw err;
+      }
     },
   };
 }

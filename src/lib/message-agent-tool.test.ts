@@ -65,13 +65,13 @@ before(async () => {
 
 test("happy path: brief is delivered to target agent voice", async () => {
   let captured: { targetSlug: string; brief: string } | null = null;
-  const runBrief: RunAgentBrief = async (target, brief) => {
+  const runBrief: RunAgentBrief = async (target, brief, _chain) => {
     captured = { targetSlug: target.slug, brief };
     return { content: "Beta says: use more whitespace." };
   };
 
   const result = await executeMessageAgent(
-    { agent: "agent-b", brief: "Review this hero layout." },
+    { agent: "agent-b", brief: "Review this hero layout.", wait: true },
     { fromAgent: { name: "Agent Alpha", slug: "agent-a", description: "Persona A" } },
     runBrief
   );
@@ -91,13 +91,13 @@ test("happy path: brief is delivered to target agent voice", async () => {
 
 test("Theo → Mara handoff resolves first names and slugs", async () => {
   let targetSlug = "";
-  const runBrief: RunAgentBrief = async (target) => {
+  const runBrief: RunAgentBrief = async (target, _brief, _chain) => {
     targetSlug = target.slug;
     return { content: "Mara says: ship the API first." };
   };
 
   const byFirstName = await executeMessageAgent(
-    { agent: "Mara", brief: "What should we build first?" },
+    { agent: "Mara", brief: "What should we build first?", wait: true },
     {
       fromAgent: { name: "Theo Rios", slug: "graphic-designer", description: "Design" },
     },
@@ -107,7 +107,7 @@ test("Theo → Mara handoff resolves first names and slugs", async () => {
   assert.equal(targetSlug, "senior-developer");
 
   const bySlug = await executeMessageAgent(
-    { agent: "senior-developer", brief: "Quick architecture check." },
+    { agent: "senior-developer", brief: "Quick architecture check.", wait: true },
     {
       fromAgent: { name: "Theo Rios", slug: "graphic-designer", description: "Design" },
     },
@@ -161,7 +161,7 @@ test("messageAgentPendingDetail shows target while nested run is in flight", asy
   assert.match(detail, /→ Mara Chen \(senior-developer\): consulting/);
 });
 
-test("nested agent run does not expose message_agent (no chain inheritance)", () => {
+test("receiver tool grants stay separate from caller (no grant inheritance)", () => {
   const callerTools = getToolDefinitionNames({
     fsGranted: false,
     shellGranted: false,
@@ -173,9 +173,9 @@ test("nested agent run does not expose message_agent (no chain inheritance)", ()
   const calleeTools = getToolDefinitionNames({
     fsGranted: true,
     shellGranted: true,
-    messageAgentEnabled: false,
+    messageAgentEnabled: true,
   });
-  assert.ok(!calleeTools.includes("message_agent"));
+  assert.ok(calleeTools.includes("message_agent"));
   assert.ok(calleeTools.includes("read_file"));
   assert.ok(calleeTools.includes("run_shell"));
 });
@@ -201,7 +201,7 @@ test("message_agent result does not leak tool grants to caller", async () => {
   });
 
   const result = await executeMessageAgent(
-    { agent: "Agent Beta", brief: "ping" },
+    { agent: "Agent Beta", brief: "ping", wait: true },
     { fromAgent: { name: "Agent Alpha", slug: "agent-a", description: "" } },
     async () => ({ content: "pong" })
   );

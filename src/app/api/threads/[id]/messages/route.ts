@@ -58,10 +58,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     },
   });
 
-  const history: ChatMessage[] = thread.messages.map((m) => ({
-    role: m.role as "user" | "assistant" | "system",
-    content: m.content,
-  }));
+  const history: ChatMessage[] = thread.messages
+    .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "agent_reply")
+    .map((m) => ({
+      role: (m.role === "agent_reply" ? "user" : m.role) as "user" | "assistant" | "system",
+      content: m.content,
+    }));
 
   const agentVoice = {
     name: thread.agent.name,
@@ -90,6 +92,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             history,
             userText: content,
             streamTokens: true,
+            senderThreadId: thread.id,
             onEvent: send,
           });
 
@@ -170,6 +173,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       agent: agentVoice,
       history,
       userText: content,
+      senderThreadId: thread.id,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "LLM error";
