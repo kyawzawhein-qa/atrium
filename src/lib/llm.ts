@@ -13,6 +13,7 @@ import {
   MESSAGE_AGENT_TOOL_ID,
   toolStatusForMessageAgentResult,
   type AgentMessageChainContext,
+  type RunAgentBriefResult,
 } from "./message-agent-tool";
 import { awaitAgentMessageDispatches } from "./agent-message-dispatcher";
 import {
@@ -587,7 +588,7 @@ async function runAgentBrief(
   brief: string,
   chain: AgentMessageChainContext,
   signal?: AbortSignal
-): Promise<{ content: string }> {
+): Promise<RunAgentBriefResult> {
   const reply = await generateAssistantReply({
     agent: target,
     history: [],
