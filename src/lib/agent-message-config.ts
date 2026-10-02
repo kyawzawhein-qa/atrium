@@ -19,5 +19,5 @@ export function getAgentMessageDispatchTimeoutMs(): number {
   const raw = process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS;
   if (raw === undefined || raw === "") return 120_000;
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 5_000 ? n : 120_000;
+  return Number.isFinite(n) && n >= 50 ? n : 120_000;
 }

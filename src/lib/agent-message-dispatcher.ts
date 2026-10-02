@@ -11,6 +11,11 @@ import {
   type RunAgentBrief,
 } from "./message-agent-tool";
 import { getAgentMessageDispatchTimeoutMs, getMaxAgentMessageHops } from "./agent-message-config";
+import {
+  markAgentMessageFailed,
+  notifySenderAgentReplyFailure,
+  notifySenderAgentReplySuccess,
+} from "./agent-message-notify";
 
 export type AgentMessageToolStatus = "queued" | "running" | "done" | "failed";
 
@@ -22,6 +27,18 @@ export type AgentMessageStatusListener = (update: {
 }) => void;
 
 const listeners = new Map<string, Set<AgentMessageStatusListener>>();
+
+let bootPromise: Promise<void> | null = null;
+let bootDisabledForTests = false;
+let autoDispatchEnabled = true;
+
+export function disableAgentMessageDispatcherBootForTests(): void {
+  bootDisabledForTests = true;
+}
+
+export function setAgentMessageAutoDispatchForTests(enabled: boolean): void {
+  autoDispatchEnabled = enabled;
+}
 
 export function subscribeAgentMessage(
   messageId: string,
@@ -60,7 +77,7 @@ export function setAgentMessageReceiverRunnerForTests(runner: RunAgentBrief | nu
   testReceiverRunner = runner;
 }
 
-const defaultReceiverRunner: RunAgentBrief = async (voice, brief, chain) => {
+const defaultReceiverRunner: RunAgentBrief = async (voice, brief, chain, signal) => {
   const reply = await generateAssistantReply({
     agent: voice,
     history: [],
@@ -69,17 +86,100 @@ const defaultReceiverRunner: RunAgentBrief = async (voice, brief, chain) => {
     messageAgentEnabled: chain.hopCount < getMaxAgentMessageHops(),
     agentMessageChain: chain,
     inboundAgentMessageId: chain.parentMessageId ?? undefined,
+    abortSignal: signal,
   });
   return { content: reply.content };
 };
 
-export function enqueueAgentMessageDispatch(messageId: string): void {
-  void waitForAgentMessageDispatch(messageId).catch((err) => {
-    console.error("[agent-message-dispatcher]", messageId, err);
+/**
+ * On process boot: recover inbox rows after a crash/restart.
+ * - Stuck `running` (not stale): reset to `queued` and re-dispatch (retry policy).
+ * - Stale `queued`/`running`: mark `failed` and notify sender.
+ * - `queued` (fresh): re-dispatch.
+ * - `failed` without sender notification: notify sender (idempotent).
+ */
+export async function bootAgentMessageDispatcher(): Promise<void> {
+  if (bootDisabledForTests) return;
+  if (bootPromise) return bootPromise;
+  bootPromise = runStartupSweep();
+  return bootPromise;
+}
+
+/** Test hook: run recovery sweep without re-dispatching (autoDispatch off). */
+export async function runAgentMessageRecoverySweepForTests(): Promise<void> {
+  const prev = autoDispatchEnabled;
+  autoDispatchEnabled = false;
+  try {
+    await runStartupSweep();
+  } finally {
+    autoDispatchEnabled = prev;
+  }
+}
+
+async function runStartupSweep(): Promise<void> {
+  const timeoutMs = getAgentMessageDispatchTimeoutMs();
+  const staleBefore = new Date(Date.now() - timeoutMs);
+
+  const rows = await prisma.agentMessage.findMany({
+    where: {
+      status: { in: ["queued", "running", "failed"] },
+    },
+    orderBy: { createdAt: "asc" },
   });
+
+  const toDispatch: string[] = [];
+
+  for (const row of rows) {
+    const stale = row.createdAt < staleBefore;
+    if (row.status === "failed") {
+      if (!row.senderNotified) {
+        await notifySenderAgentReplyFailure(row, row.error ?? "Agent message failed.");
+      }
+      continue;
+    }
+
+    if (stale) {
+      const err = "Agent message exceeded timeout during server recovery.";
+      await prisma.agentMessage.update({
+        where: { id: row.id },
+        data: { status: "failed", error: err },
+      });
+      const updated = await prisma.agentMessage.findUniqueOrThrow({ where: { id: row.id } });
+      await notifySenderAgentReplyFailure(updated, err);
+      emitStatus(row.id, "failed", { error: err });
+      continue;
+    }
+
+    if (row.status === "running") {
+      await prisma.agentMessage.update({
+        where: { id: row.id },
+        data: { status: "queued" },
+      });
+    }
+
+    if (row.status === "queued" || row.status === "running") {
+      toDispatch.push(row.id);
+    }
+  }
+
+  for (const id of toDispatch) {
+    if (autoDispatchEnabled) {
+      enqueueAgentMessageDispatch(id);
+    }
+  }
+}
+
+export function enqueueAgentMessageDispatch(messageId: string): void {
+  if (!autoDispatchEnabled) return;
+  void bootAgentMessageDispatcher()
+    .then(() => waitForAgentMessageDispatch(messageId))
+    .catch((err) => {
+      console.error("[agent-message-dispatcher]", messageId, err);
+    });
 }
 
 export async function waitForAgentMessageDispatch(messageId: string): Promise<void> {
+  await bootAgentMessageDispatcher();
   const existing = inFlight.get(messageId);
   if (existing) {
     await existing;
@@ -94,49 +194,77 @@ export async function waitForAgentMessageDispatch(messageId: string): Promise<vo
   }
 }
 
-async function dispatchAgentMessage(messageId: string): Promise<void> {
-  try {
-    const row = await prisma.agentMessage.findUnique({ where: { id: messageId } });
-    if (!row || row.status !== "queued") return;
+export async function drainAgentMessageDispatcherForTests(): Promise<void> {
+  await bootAgentMessageDispatcher();
+  while (inFlight.size > 0) {
+    await Promise.all([...inFlight.values()]);
+  }
+}
 
+export async function resetAgentMessageDispatcherForTests(): Promise<void> {
+  await drainAgentMessageDispatcherForTests();
+  inFlight.clear();
+  listeners.clear();
+  testReceiverRunner = null;
+  bootPromise = null;
+  bootDisabledForTests = true;
+  autoDispatchEnabled = true;
+}
+
+async function dispatchAgentMessage(messageId: string): Promise<void> {
+  let row = await prisma.agentMessage.findUnique({ where: { id: messageId } });
+  if (!row || row.status !== "queued") return;
+
+  try {
     await prisma.agentMessage.update({
       where: { id: messageId },
       data: { status: "running" },
     });
     emitStatus(messageId, "running");
 
+    row = await prisma.agentMessage.findUniqueOrThrow({ where: { id: messageId } });
     const target = await prisma.agent.findUnique({ where: { slug: row.toAgentSlug } });
     if (!target) {
-      await failMessage(messageId, row, `Receiver agent "${row.toAgentSlug}" not found.`);
+      await markAgentMessageFailed(messageId, `Receiver agent "${row.toAgentSlug}" not found.`);
+      emitStatus(messageId, "failed", {
+        error: `Receiver agent "${row.toAgentSlug}" not found.`,
+      });
       return;
     }
 
     const chainSlugs = await buildChainSlugsForThread(row.threadId);
-    const hopCount = row.hopCount;
-
     const chain: AgentMessageChainContext = {
       threadId: row.threadId,
-      hopCount,
+      hopCount: row.hopCount,
       chainSlugs,
       parentMessageId: row.id,
     };
 
     const voice = agentToVoice(target);
     const timeoutMs = getAgentMessageDispatchTimeoutMs();
-
     const runner = testReceiverRunner ?? defaultReceiverRunner;
+
+    const ac = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
     let replyText: string;
     try {
       replyText = await Promise.race([
-        runner(voice, row.body, chain).then((r) => r.content),
-        new Promise<string>((_, reject) =>
-          setTimeout(() => reject(new Error("Agent message timed out")), timeoutMs)
-        ),
+        runner(voice, row.body, chain, ac.signal).then((r) => r.content),
+        new Promise<string>((_, reject) => {
+          timer = setTimeout(() => {
+            ac.abort(new Error("Agent message timed out"));
+            reject(new Error("Agent message timed out"));
+          }, timeoutMs);
+        }),
       ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Agent run failed";
-      await failMessage(messageId, row, message.slice(0, 220));
+      await markAgentMessageFailed(messageId, message.slice(0, 220));
+      emitStatus(messageId, "failed", { error: message.slice(0, 220) });
       return;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
 
     const trimmed = replyText.trim() || "(empty response)";
@@ -145,47 +273,17 @@ async function dispatchAgentMessage(messageId: string): Promise<void> {
       data: { status: "done", reply: trimmed, error: null },
     });
 
-    if (row.senderThreadId) {
-      await prisma.message.create({
-        data: {
-          threadId: row.senderThreadId,
-          role: "agent_reply",
-          content: `[Reply from ${target.name} (${target.slug})]\n\n${trimmed}`,
-        },
-      });
-      await prisma.thread.update({
-        where: { id: row.senderThreadId },
-        data: { updatedAt: new Date() },
-      });
-    }
+    const fresh = await prisma.agentMessage.findUniqueOrThrow({ where: { id: messageId } });
+    await notifySenderAgentReplySuccess(fresh, target.name, target.slug, trimmed);
 
     const detail = `→ ${target.name} (${target.slug}): ${preview(trimmed)}`;
     emitStatus(messageId, "done", { detail });
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Dispatch failed";
     console.error("[agent-message-dispatcher]", messageId, err);
-    throw err;
+    await markAgentMessageFailed(messageId, message.slice(0, 220));
+    emitStatus(messageId, "failed", { error: message.slice(0, 220) });
   }
-}
-
-async function failMessage(
-  messageId: string,
-  row: { senderThreadId: string | null; fromAgentSlug: string; toAgentSlug: string },
-  error: string
-): Promise<void> {
-  await prisma.agentMessage.update({
-    where: { id: messageId },
-    data: { status: "failed", error },
-  });
-  if (row.senderThreadId) {
-    await prisma.message.create({
-      data: {
-        threadId: row.senderThreadId,
-        role: "agent_reply",
-        content: `Agent message to ${row.toAgentSlug} failed: ${error}`,
-      },
-    });
-  }
-  emitStatus(messageId, "failed", { error });
 }
 
 function preview(text: string): string {
@@ -211,22 +309,34 @@ export async function awaitAgentMessageDispatches(
               resolve();
             }
           });
-          void waitForAgentMessageDispatch(id);
-          const tick = async () => {
-            const row = await prisma.agentMessage.findUnique({ where: { id } });
-            if (!row || row.status === "done" || row.status === "failed") {
-              unsub();
-              resolve();
-              return;
-            }
-            if (Date.now() > deadline) {
-              unsub();
-              resolve();
-              return;
-            }
-            setTimeout(tick, 200);
+          void waitForAgentMessageDispatch(id).catch((err) => {
+            console.error("[agent-message-dispatcher] await dispatch", id, err);
+            unsub();
+            resolve();
+          });
+          const tick = (): void => {
+            void (async () => {
+              try {
+                const row = await prisma.agentMessage.findUnique({ where: { id } });
+                if (!row || row.status === "done" || row.status === "failed") {
+                  unsub();
+                  resolve();
+                  return;
+                }
+                if (Date.now() > deadline) {
+                  unsub();
+                  resolve();
+                  return;
+                }
+                setTimeout(tick, 200);
+              } catch (err) {
+                console.error("[agent-message-dispatcher] await tick", id, err);
+                unsub();
+                resolve();
+              }
+            })();
           };
-          void tick();
+          tick();
         })
     )
   );

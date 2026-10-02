@@ -86,6 +86,8 @@ model AgentMessage {
   /// Sender chat thread to append agent_reply / tool updates.
   senderThreadId  String?
   senderToolLogId String?
+  /// Idempotent failure notification on sender thread (recovery sweep).
+  senderNotified  Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

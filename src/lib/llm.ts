@@ -374,13 +374,23 @@ type ToolChoice =
   | "none"
   | { type: "function"; function: { name: string } };
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Agent message aborted");
+  }
+}
+
 async function callOpenRouter(opts: {
   apiKey: string;
   model: string;
   messages: unknown[];
   tools?: ReturnType<typeof buildToolDefs>;
   toolChoice?: ToolChoice;
+  abortSignal?: AbortSignal;
 }): Promise<ChatChoice> {
+  throwIfAborted(opts.abortSignal);
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -395,6 +405,7 @@ async function callOpenRouter(opts: {
     method: "POST",
     headers: openRouterHeaders(opts.apiKey),
     body: JSON.stringify(body),
+    signal: opts.abortSignal,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -416,7 +427,9 @@ async function streamOpenRouter(opts: {
   tools?: ReturnType<typeof buildToolDefs>;
   toolChoice?: ToolChoice;
   onToken?: (text: string) => void;
+  abortSignal?: AbortSignal;
 }): Promise<ChatChoice> {
+  throwIfAborted(opts.abortSignal);
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -432,6 +445,7 @@ async function streamOpenRouter(opts: {
     method: "POST",
     headers: openRouterHeaders(opts.apiKey),
     body: JSON.stringify(body),
+    signal: opts.abortSignal,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -453,6 +467,7 @@ async function streamOpenRouter(opts: {
   let sawToolCalls = false;
 
   while (true) {
+    throwIfAborted(opts.abortSignal);
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -563,14 +578,17 @@ function parseToolArgs(raw?: string): {
 async function runAgentBrief(
   target: AgentVoice,
   brief: string,
-  chain: AgentMessageChainContext
+  chain: AgentMessageChainContext,
+  signal?: AbortSignal
 ): Promise<{ content: string }> {
   const reply = await generateAssistantReply({
     agent: target,
     history: [],
     userText: brief,
     agentMessageChain: chain,
+    inboundAgentMessageId: chain.parentMessageId ?? undefined,
     streamTokens: false,
+    abortSignal: signal,
   });
   return { content: reply.content };
 }
@@ -586,6 +604,7 @@ async function executeOneTool(
     senderToolLogId?: string;
     agentMessageChain?: AgentMessageChainContext;
     inboundAgentMessageId?: string;
+    abortSignal?: AbortSignal;
     onNeedsApproval?: (info: {
       approvalId: string;
       command: string;
@@ -644,6 +663,7 @@ export async function generateAssistantReply(opts: {
   agentMessageChain?: AgentMessageChainContext;
   inboundAgentMessageId?: string;
   senderThreadId?: string;
+  abortSignal?: AbortSignal;
 }): Promise<LlmResult> {
   await ensurePluginsLoaded();
   await ensureSeedAgents();
@@ -700,6 +720,7 @@ export async function generateAssistantReply(opts: {
   const wantStream = Boolean(opts.streamTokens && emit);
 
   for (let round = 0; round < maxRounds; round++) {
+    throwIfAborted(opts.abortSignal);
     const fsIntent = detectFsIntent(opts.userText);
     const wantsCollaboration = detectCollaborationIntent(opts.userText);
     const forceFsTools =
@@ -728,6 +749,7 @@ export async function generateAssistantReply(opts: {
           tools: toolDefs,
           toolChoice,
           onToken: (text) => emit?.({ type: "token", text }),
+          abortSignal: opts.abortSignal,
         })
       : await callOpenRouter({
           apiKey,
@@ -735,6 +757,7 @@ export async function generateAssistantReply(opts: {
           messages,
           tools: toolDefs,
           toolChoice,
+          abortSignal: opts.abortSignal,
         });
 
     const msg = choice.message;
@@ -805,6 +828,7 @@ export async function generateAssistantReply(opts: {
         });
       }
 
+      throwIfAborted(opts.abortSignal);
       const result = await executeOneTool(name, args, {
         fromAgent: opts.agent,
         toolsGranted,
@@ -813,6 +837,7 @@ export async function generateAssistantReply(opts: {
         senderToolLogId: logId,
         agentMessageChain: opts.agentMessageChain,
         inboundAgentMessageId: opts.inboundAgentMessageId,
+        abortSignal: opts.abortSignal,
         onNeedsApproval: (info) => {
           const entry: ToolLogEntry = {
             id: logId,
@@ -888,10 +913,16 @@ export async function generateAssistantReply(opts: {
           model,
           messages,
           onToken: (t) => emit?.({ type: "token", text: t }),
+          abortSignal: opts.abortSignal,
         });
         finalContent = (last.message?.content || text || "(empty response)").trim();
       } else {
-        const last = await callOpenRouter({ apiKey, model, messages });
+        const last = await callOpenRouter({
+          apiKey,
+          model,
+          messages,
+          abortSignal: opts.abortSignal,
+        });
         finalContent = (last.message?.content || text || "(empty response)").trim();
         if (finalContent && emit) emit({ type: "token", text: finalContent });
       }

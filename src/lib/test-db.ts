@@ -5,6 +5,9 @@ import type { PrismaClient } from "@prisma/client";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { disableAgentMessageDispatcherBootForTests } from "./agent-message-dispatcher";
+
+disableAgentMessageDispatcherBootForTests();
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

@@ -9,12 +9,17 @@ import {
 import {
   waitForAgentMessageDispatch,
   setAgentMessageReceiverRunnerForTests,
+  drainAgentMessageDispatcherForTests,
+  resetAgentMessageDispatcherForTests,
+  runAgentMessageRecoverySweepForTests,
 } from "./agent-message-dispatcher";
 import { prisma } from "./prisma";
 
 const testDb = createTestDb();
 
-after(() => {
+after(async () => {
+  await drainAgentMessageDispatcherForTests();
+  await resetAgentMessageDispatcherForTests();
   testDb.cleanup();
 });
 
@@ -98,13 +103,97 @@ test("wait:true preserves synchronous reply shape", async () => {
   assert.ok(!("queued" in result));
 });
 
-test("A→B→C chain within hop limit", async () => {
+test("wait:true counts toward outbound rate limit", async () => {
+  await prisma.agentMessage.deleteMany({ where: { fromAgentSlug: "wait-rater" } });
+  await prisma.agent.create({
+    data: {
+      slug: "wait-rater",
+      name: "Wait Rater",
+      description: "",
+      modelId: "openai/gpt-4o-mini",
+      modelName: "Mini",
+    },
+  });
+  const from = { name: "Wait Rater", slug: "wait-rater", description: "" };
+  const prev = process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE;
+  process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE = "2";
+  const noop: RunAgentBrief = async () => ({ content: "ok" });
+
+  assert.ok(
+    (await executeMessageAgent({ agent: "agent-b", brief: "1", wait: true }, { fromAgent: from }, noop))
+      .ok
+  );
+  assert.ok(
+    (await executeMessageAgent({ agent: "agent-b", brief: "2", wait: true }, { fromAgent: from }, noop))
+      .ok
+  );
+  const third = await executeMessageAgent(
+    { agent: "agent-b", brief: "3", wait: true },
+    { fromAgent: from },
+    noop
+  );
+  process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE = prev;
+
+  assert.equal(third.ok, false);
+  if (third.ok) throw new Error("expected rate limit");
+  assert.equal(third.code, "rate_limited");
+});
+
+test("async A→B→C delivers C content to A thread", async () => {
+  const marker = "C-ASYNC-CHAIN-MARKER-42";
+  setAgentMessageReceiverRunnerForTests(async (voice, brief, chain) => {
+    if (voice.slug !== "agent-b") {
+      return { content: "unexpected receiver" };
+    }
+    const nested = await executeMessageAgent(
+      { agent: "agent-c", brief: "nested async from B" },
+      {
+        fromAgent: voice,
+        chain,
+        inboundAgentMessageId: chain.parentMessageId ?? undefined,
+      },
+      async (target) => {
+        if (target.slug === "agent-c") return { content: marker };
+        return { content: "wrong target" };
+      }
+    );
+    if (!nested.ok || !("reply" in nested)) {
+      throw new Error("nested handoff failed");
+    }
+    return { content: `B wrapping: ${nested.reply}` };
+  });
+
+  const thread = await prisma.thread.create({
+    data: {
+      title: "chain",
+      agentId: (await prisma.agent.findUniqueOrThrow({ where: { slug: "agent-a" } })).id,
+    },
+  });
+
+  const top = await executeMessageAgent(
+    { agent: "agent-b", brief: "start async chain" },
+    { fromAgent: fromA, senderThreadId: thread.id },
+    async () => ({ content: "unused" })
+  );
+  assert.ok(top.ok && "messageId" in top);
+  await waitForAgentMessageDispatch(top.messageId);
+
+  const replies = await prisma.message.findMany({
+    where: { threadId: thread.id, role: "agent_reply" },
+  });
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].content, new RegExp(marker));
+  assert.match(replies[0].content, /B wrapping/);
+  setAgentMessageReceiverRunnerForTests(null);
+});
+
+test("A→B→C chain within hop limit (wait:true top)", async () => {
   const calls: string[] = [];
   const runBrief: RunAgentBrief = async (target, brief, chain) => {
     calls.push(`${target.slug}:${chain.hopCount}`);
     if (target.slug === "agent-b" && brief.includes("chain-step-2")) {
       await executeMessageAgent(
-        { agent: "agent-c", brief: "chain-step-3", wait: true },
+        { agent: "agent-c", brief: "chain-step-3" },
         {
           fromAgent: { name: "B", slug: "agent-b", description: "" },
           chain,
@@ -189,7 +278,87 @@ test("dispatch failure sets status failed and agent_reply error", async () => {
   setAgentMessageReceiverRunnerForTests(null);
 });
 
-test("rate limit triggers", async () => {
+test("dispatch timeout fails quickly and marks row failed", async () => {
+  const prev = process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS;
+  process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS = "80";
+  setAgentMessageReceiverRunnerForTests(async (_v, _b, _c, signal) => {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 10_000);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(signal.reason ?? new Error("Agent message timed out"));
+        },
+        { once: true }
+      );
+    });
+    return { content: "too late" };
+  });
+
+  const result = await executeMessageAgent(
+    { agent: "agent-b", brief: "slow" },
+    { fromAgent: fromA },
+    async () => ({ content: "unused" })
+  );
+  assert.ok(result.ok && "messageId" in result);
+  const started = Date.now();
+  await waitForAgentMessageDispatch(result.messageId);
+  assert.ok(Date.now() - started < 5000, "timeout dispatch should finish quickly");
+
+  const row = await prisma.agentMessage.findUniqueOrThrow({ where: { id: result.messageId } });
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /timed out/i);
+  process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS = prev;
+  setAgentMessageReceiverRunnerForTests(null);
+});
+
+test("recovery sweep re-queues stuck running and notifies stale failures", async () => {
+  const thread = await prisma.thread.create({
+    data: {
+      title: "recovery",
+      agentId: (await prisma.agent.findUniqueOrThrow({ where: { slug: "agent-a" } })).id,
+    },
+  });
+  const stale = await prisma.agentMessage.create({
+    data: {
+      fromAgentSlug: "agent-a",
+      toAgentSlug: "agent-b",
+      threadId: "recovery-thread",
+      hopCount: 1,
+      body: "stale",
+      status: "running",
+      senderThreadId: thread.id,
+      createdAt: new Date(Date.now() - 600_000),
+    },
+  });
+  const stuck = await prisma.agentMessage.create({
+    data: {
+      fromAgentSlug: "agent-a",
+      toAgentSlug: "agent-b",
+      threadId: "recovery-thread-2",
+      hopCount: 1,
+      body: "stuck",
+      status: "running",
+      senderThreadId: thread.id,
+    },
+  });
+
+  await runAgentMessageRecoverySweepForTests();
+
+  const staleRow = await prisma.agentMessage.findUniqueOrThrow({ where: { id: stale.id } });
+  assert.equal(staleRow.status, "failed");
+  assert.equal(staleRow.senderNotified, true);
+
+  const stuckRow = await prisma.agentMessage.findUniqueOrThrow({ where: { id: stuck.id } });
+  assert.equal(stuckRow.status, "queued");
+
+  await runAgentMessageRecoverySweepForTests();
+  const stuckAfter = await prisma.agentMessage.findUniqueOrThrow({ where: { id: stuck.id } });
+  assert.equal(stuckAfter.status, "queued");
+});
+
+test("rate limit triggers on async enqueue", async () => {
   await prisma.agentMessage.deleteMany({ where: { fromAgentSlug: "rate-limiter" } });
   await prisma.agent.create({
     data: {
@@ -222,6 +391,7 @@ test("rate limit triggers", async () => {
   );
 
   process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE = prev;
+  await drainAgentMessageDispatcherForTests();
 
   assert.ok(r1.ok && r2.ok);
   assert.equal(r3.ok, false);

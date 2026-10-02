@@ -8,10 +8,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   generateAssistantReply,
-  type ChatMessage,
   type StreamEvent,
   type ToolLogEntry,
 } from "@/lib/llm";
+import { mapThreadMessagesToChatHistory } from "@/lib/thread-history";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -58,12 +58,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     },
   });
 
-  const history: ChatMessage[] = thread.messages
-    .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "agent_reply")
-    .map((m) => ({
-      role: (m.role === "agent_reply" ? "user" : m.role) as "user" | "assistant" | "system",
-      content: m.content,
-    }));
+  const history = mapThreadMessagesToChatHistory(thread.messages);
 
   const agentVoice = {
     name: thread.agent.name,

@@ -8,6 +8,7 @@ import { prisma } from "./prisma";
 import type { AgentVoice } from "./llm";
 import { getAgentMessageRateLimitPerMinute, getMaxAgentMessageHops } from "./agent-message-config";
 import { enqueueAgentMessageDispatch } from "./agent-message-dispatcher";
+import { markAgentMessageFailed } from "./agent-message-notify";
 
 export const MESSAGE_AGENT_TOOL_ID = "message_agent";
 
@@ -124,7 +125,8 @@ export type MessageAgentResult =
 export type RunAgentBrief = (
   target: AgentVoice,
   brief: string,
-  chain: AgentMessageChainContext
+  chain: AgentMessageChainContext,
+  signal?: AbortSignal
 ) => Promise<{ content: string }>;
 
 function normalizeLookupKey(value: string): string {
@@ -258,6 +260,9 @@ export async function executeMessageAgent(
   const targetKey = args.agent?.trim() || "";
   const brief = args.brief?.trim() || "";
   const wait = args.wait === true;
+  const insideReceiver = Boolean(ctx.inboundAgentMessageId);
+  /** Nested hops inside a receiver run must block until the callee answers (phase 1). */
+  const effectiveWait = wait || insideReceiver;
 
   if (!targetKey) {
     return { ok: false, code: "invalid", error: "agent is required" };
@@ -319,22 +324,6 @@ export async function executeMessageAgent(
     parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
   };
 
-  if (wait) {
-    try {
-      const voice = agentToVoice(target);
-      const { content } = await runBrief(voice, brief, chain);
-      return {
-        ok: true,
-        agent: target.name,
-        slug: target.slug,
-        reply: content.trim() || "(empty response)",
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Agent run failed";
-      return { ok: false, code: "agent_error", error: message.slice(0, 220) };
-    }
-  }
-
   const row = await prisma.agentMessage.create({
     data: {
       fromAgentSlug: ctx.fromAgent.slug,
@@ -343,15 +332,37 @@ export async function executeMessageAgent(
       parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
       hopCount,
       body: brief,
-      status: "queued",
+      status: effectiveWait ? "running" : "queued",
       senderThreadId: ctx.senderThreadId ?? null,
       senderToolLogId: ctx.senderToolLogId ?? null,
     },
   });
 
-  enqueueAgentMessageDispatch(row.id);
+  if (!effectiveWait) {
+    enqueueAgentMessageDispatch(row.id);
+    return { ok: true, queued: true, messageId: row.id };
+  }
 
-  return { ok: true, queued: true, messageId: row.id };
+  try {
+    const voice = agentToVoice(target);
+    const { content } = await runBrief(voice, brief, chain);
+    const trimmed = content.trim() || "(empty response)";
+    await prisma.agentMessage.update({
+      where: { id: row.id },
+      data: { status: "done", reply: trimmed, error: null },
+    });
+    return {
+      ok: true,
+      agent: target.name,
+      slug: target.slug,
+      reply: trimmed,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Agent run failed";
+    const errText = message.slice(0, 220);
+    await markAgentMessageFailed(row.id, errText);
+    return { ok: false, code: "agent_error", error: errText };
+  }
 }
 
 export function messageAgentDetail(result: MessageAgentResult): string {
