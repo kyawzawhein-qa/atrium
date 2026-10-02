@@ -129,13 +129,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             },
           });
 
+          await flushDeferredAgentThreadPosts(thread.id);
           send({
             type: "done",
             messageId: assistantMessage.id,
             toolLog: reply.toolLog,
             content: reply.content,
           });
-          await flushDeferredAgentThreadPosts(thread.id);
         } catch (err) {
           const message = err instanceof Error ? err.message : "LLM error";
           const assistantMessage = await prisma.message.create({
@@ -146,13 +146,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             },
           });
           send({ type: "error", message });
+          await flushDeferredAgentThreadPosts(thread.id);
           send({
             type: "done",
             messageId: assistantMessage.id,
             toolLog: [],
             content: `I hit a provider error: ${message}. Check Settings → OpenRouter key and this agent's model.`,
           });
-          await flushDeferredAgentThreadPosts(thread.id);
         } finally {
           controller.close();
         }
@@ -186,6 +186,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         content: `I hit a provider error: ${message}. Check Settings → OpenRouter key and this agent's model.`,
       },
     });
+    await flushDeferredAgentThreadPosts(thread.id);
     const refreshed = await prisma.thread.findUnique({
       where: { id },
       include: {

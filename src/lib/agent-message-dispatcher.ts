@@ -41,6 +41,8 @@ const listeners = new Map<string, Set<AgentMessageStatusListener>>();
 let bootPromise: Promise<void> | null = null;
 let bootDisabledForTests = false;
 let autoDispatchEnabled = true;
+/** Test-only: fail the next N startup sweep attempts (boot must retry). */
+let startupSweepFailuresRemainingForTests = 0;
 
 let activeDispatches = 0;
 const dispatchWaiters: Array<() => void> = [];
@@ -48,6 +50,14 @@ const activeTimers = new Set<ReturnType<typeof setTimeout>>();
 
 export function disableAgentMessageDispatcherBootForTests(): void {
   bootDisabledForTests = true;
+}
+
+export function enableAgentMessageDispatcherBootForTests(): void {
+  bootDisabledForTests = false;
+}
+
+export function setAgentMessageStartupSweepFailuresForTests(count: number): void {
+  startupSweepFailuresRemainingForTests = count;
 }
 
 export function setAgentMessageAutoDispatchForTests(enabled: boolean): void {
@@ -133,13 +143,27 @@ function clearTrackedTimeout(timer: ReturnType<typeof setTimeout>): void {
   activeTimers.delete(timer);
 }
 
+async function runStartupSweepOrTestFailure(): Promise<void> {
+  if (startupSweepFailuresRemainingForTests > 0) {
+    startupSweepFailuresRemainingForTests--;
+    throw new Error("Agent message startup sweep failed (test).");
+  }
+  await runStartupSweep();
+}
+
 export async function bootAgentMessageDispatcher(): Promise<void> {
   if (bootDisabledForTests) return;
   if (hasAgentMessageSweepCompleted()) return;
   if (bootPromise) return bootPromise;
-  bootPromise = runStartupSweep().then(() => {
-    markAgentMessageSweepCompleted();
-  });
+  bootPromise = runStartupSweepOrTestFailure()
+    .then(() => {
+      markAgentMessageSweepCompleted();
+    })
+    .catch((err) => {
+      bootPromise = null;
+      console.error("[agent-message-dispatcher] startup sweep failed", err);
+      throw err;
+    });
   return bootPromise;
 }
 
@@ -276,6 +300,7 @@ export async function resetAgentMessageDispatcherForTests(): Promise<void> {
   listeners.clear();
   testReceiverRunner = null;
   bootPromise = null;
+  startupSweepFailuresRemainingForTests = 0;
   bootDisabledForTests = true;
   autoDispatchEnabled = true;
   activeDispatches = 0;

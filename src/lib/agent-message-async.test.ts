@@ -11,9 +11,15 @@ import {
   setAgentMessageReceiverRunnerForTests,
   drainAgentMessageDispatcherForTests,
   runAgentMessageRecoverySweepForTests,
+  bootAgentMessageDispatcher,
+  enableAgentMessageDispatcherBootForTests,
+  setAgentMessageStartupSweepFailuresForTests,
 } from "./agent-message-dispatcher";
 import { prisma } from "./prisma";
-import { getAgentMessageBootId } from "./agent-message-boot";
+import {
+  getAgentMessageBootId,
+  resetAgentMessageBootStateForTests,
+} from "./agent-message-boot";
 
 const testDb = createTestDb();
 
@@ -563,6 +569,33 @@ test("receiver tool log is stored on agent message row", async () => {
     assert.match(row.receiverToolLog ?? "", /write_file/);
     assert.match(row.reply ?? "", /Receiver file changes/);
   } finally {
+    setAgentMessageReceiverRunnerForTests(null);
+  }
+});
+
+test("failed startup sweep does not poison later message_agent sends", async () => {
+  resetAgentMessageBootStateForTests();
+  enableAgentMessageDispatcherBootForTests();
+  setAgentMessageStartupSweepFailuresForTests(1);
+  setAgentMessageReceiverRunnerForTests(async () => ({ content: "after sweep retry" }));
+  try {
+    await assert.rejects(() => bootAgentMessageDispatcher(), /startup sweep failed/);
+    await bootAgentMessageDispatcher();
+
+    const result = await executeMessageAgent(
+      { agent: "agent-b", brief: "post-retry" },
+      { fromAgent: fromA },
+      async () => ({ content: "unused" })
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok || !("messageId" in result)) throw new Error("expected queued");
+    await waitForAgentMessageDispatch(result.messageId);
+    const row = await prisma.agentMessage.findUniqueOrThrow({
+      where: { id: result.messageId },
+    });
+    assert.equal(row.status, "done");
+  } finally {
+    setAgentMessageStartupSweepFailuresForTests(0);
     setAgentMessageReceiverRunnerForTests(null);
   }
 });
