@@ -363,7 +363,10 @@ export function messageAgentDetail(result: MessageAgentResult): string {
       result.reply.length > 120 ? result.reply.slice(0, 117) + "…" : result.reply;
     return `→ ${result.agent} (${result.slug}): ${preview}`;
   }
-  return result.error.slice(0, 180);
+  if (!result.ok) {
+    return result.error.slice(0, 180);
+  }
+  return "";
 }
 
 export function toolStatusForMessageAgentResult(
