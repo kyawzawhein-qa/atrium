@@ -5,8 +5,8 @@ import { ensureSeedAgents, resetSeedEnsured, SEED_AGENTS } from "./seed-agents";
 
 const testDb = createTestDb();
 
-after(() => {
-  testDb.cleanup();
+after(async () => {
+  await testDb.cleanup();
 });
 
 before(async () => {

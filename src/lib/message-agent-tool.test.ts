@@ -12,8 +12,8 @@ import { getToolDefinitionNames } from "./llm";
 
 const testDb = createTestDb();
 
-after(() => {
-  testDb.cleanup();
+after(async () => {
+  await testDb.cleanup();
 });
 
 async function seedAgents() {
@@ -71,7 +71,7 @@ test("happy path: brief is delivered to target agent voice", async () => {
   };
 
   const result = await executeMessageAgent(
-    { agent: "agent-b", brief: "Review this hero layout." },
+    { agent: "agent-b", brief: "Review this hero layout.", wait: true },
     { fromAgent: { name: "Agent Alpha", slug: "agent-a", description: "Persona A" } },
     runBrief
   );
@@ -97,7 +97,7 @@ test("Theo → Mara handoff resolves first names and slugs", async () => {
   };
 
   const byFirstName = await executeMessageAgent(
-    { agent: "Mara", brief: "What should we build first?" },
+    { agent: "Mara", brief: "What should we build first?", wait: true },
     {
       fromAgent: { name: "Theo Rios", slug: "graphic-designer", description: "Design" },
     },
@@ -107,7 +107,7 @@ test("Theo → Mara handoff resolves first names and slugs", async () => {
   assert.equal(targetSlug, "senior-developer");
 
   const bySlug = await executeMessageAgent(
-    { agent: "senior-developer", brief: "Quick architecture check." },
+    { agent: "senior-developer", brief: "Quick architecture check.", wait: true },
     {
       fromAgent: { name: "Theo Rios", slug: "graphic-designer", description: "Design" },
     },
@@ -161,23 +161,29 @@ test("messageAgentPendingDetail shows target while nested run is in flight", asy
   assert.match(detail, /→ Mara Chen \(senior-developer\): consulting/);
 });
 
-test("nested agent run does not expose message_agent (no chain inheritance)", () => {
+test("receiver tool surface follows studio grants, not caller tool list", () => {
   const callerTools = getToolDefinitionNames({
     fsGranted: false,
     shellGranted: false,
     messageAgentEnabled: true,
   });
-  assert.ok(callerTools.includes("message_agent"));
-  assert.ok(!callerTools.includes("read_file"));
+  assert.deepEqual(callerTools, ["message_agent"]);
 
-  const calleeTools = getToolDefinitionNames({
+  const receiverWithoutFs = getToolDefinitionNames({
+    fsGranted: false,
+    shellGranted: false,
+    messageAgentEnabled: true,
+  });
+  assert.deepEqual(receiverWithoutFs, ["message_agent"]);
+
+  const receiverWithFs = getToolDefinitionNames({
     fsGranted: true,
     shellGranted: true,
-    messageAgentEnabled: false,
+    messageAgentEnabled: true,
   });
-  assert.ok(!calleeTools.includes("message_agent"));
-  assert.ok(calleeTools.includes("read_file"));
-  assert.ok(calleeTools.includes("run_shell"));
+  assert.ok(receiverWithFs.includes("read_file"));
+  assert.ok(receiverWithFs.includes("write_file"));
+  assert.ok(!callerTools.includes("write_file"));
 });
 
 test("message_agent is available without filesystem grants", () => {
@@ -201,7 +207,7 @@ test("message_agent result does not leak tool grants to caller", async () => {
   });
 
   const result = await executeMessageAgent(
-    { agent: "Agent Beta", brief: "ping" },
+    { agent: "Agent Beta", brief: "ping", wait: true },
     { fromAgent: { name: "Agent Alpha", slug: "agent-a", description: "" } },
     async () => ({ content: "pong" })
   );

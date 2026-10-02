@@ -11,7 +11,16 @@ import {
   messageAgentPendingDetail,
   messageAgentToolDefinition,
   MESSAGE_AGENT_TOOL_ID,
+  toolStatusForMessageAgentResult,
+  type AgentMessageChainContext,
+  type RunAgentBriefResult,
 } from "./message-agent-tool";
+import { awaitAgentMessageDispatches } from "./agent-message-dispatcher";
+import {
+  getMaxAgentMessageHops,
+  getAgentMessageSenderWaitTimeoutMs,
+} from "./agent-message-config";
+import { beginDeferringAgentThreadPosts } from "./agent-message-notify";
 import { ensureSeedAgents } from "./seed-agents";
 import {
   runShellWithApprovalGate,
@@ -34,10 +43,11 @@ export type ChatMessage = {
 export type ToolLogEntry = {
   id: string;
   name: string;
-  status: "ran" | "denied" | "error" | "needs_approval" | "running";
+  status: "ran" | "denied" | "error" | "needs_approval" | "running" | "queued";
   detail: string;
   approvalId?: string;
   truncated?: boolean;
+  agentMessageId?: string;
 };
 
 export type LlmResult = {
@@ -350,8 +360,13 @@ export function toolResultDetail(result: unknown, toolName?: string): string {
   }
 }
 
-function statusFromResult(result: unknown): ToolLogEntry["status"] {
-  const rec = result as { ok?: boolean; code?: string };
+function statusFromResult(result: unknown, toolName?: string): ToolLogEntry["status"] {
+  const rec = result as { ok?: boolean; code?: string; queued?: boolean };
+  if (toolName === MESSAGE_AGENT_TOOL_ID && rec?.ok === true) {
+    return toolStatusForMessageAgentResult(
+      result as Parameters<typeof toolStatusForMessageAgentResult>[0]
+    );
+  }
   if (rec && rec.ok === true) return "ran";
   if (rec?.code === "needs_approval") return "needs_approval";
   if (rec?.code === "denied") return "denied";
@@ -364,13 +379,23 @@ type ToolChoice =
   | "none"
   | { type: "function"; function: { name: string } };
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Agent message aborted");
+  }
+}
+
 async function callOpenRouter(opts: {
   apiKey: string;
   model: string;
   messages: unknown[];
   tools?: ReturnType<typeof buildToolDefs>;
   toolChoice?: ToolChoice;
+  abortSignal?: AbortSignal;
 }): Promise<ChatChoice> {
+  throwIfAborted(opts.abortSignal);
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -385,6 +410,7 @@ async function callOpenRouter(opts: {
     method: "POST",
     headers: openRouterHeaders(opts.apiKey),
     body: JSON.stringify(body),
+    signal: opts.abortSignal,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -406,7 +432,9 @@ async function streamOpenRouter(opts: {
   tools?: ReturnType<typeof buildToolDefs>;
   toolChoice?: ToolChoice;
   onToken?: (text: string) => void;
+  abortSignal?: AbortSignal;
 }): Promise<ChatChoice> {
+  throwIfAborted(opts.abortSignal);
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -422,6 +450,7 @@ async function streamOpenRouter(opts: {
     method: "POST",
     headers: openRouterHeaders(opts.apiKey),
     body: JSON.stringify(body),
+    signal: opts.abortSignal,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -443,6 +472,7 @@ async function streamOpenRouter(opts: {
   let sawToolCalls = false;
 
   while (true) {
+    throwIfAborted(opts.abortSignal);
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -528,6 +558,7 @@ function parseToolArgs(raw?: string): {
   cwd?: string;
   agent?: string;
   brief?: string;
+  wait?: boolean;
 } {
   if (!raw) return {};
   try {
@@ -542,22 +573,29 @@ function parseToolArgs(raw?: string): {
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
       agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
       brief: typeof parsed.brief === "string" ? parsed.brief : undefined,
+      wait: parsed.wait === true,
     };
   } catch {
     return {};
   }
 }
 
-async function runAgentBrief(target: AgentVoice, brief: string): Promise<{ content: string }> {
+async function runAgentBrief(
+  target: AgentVoice,
+  brief: string,
+  chain: AgentMessageChainContext,
+  signal?: AbortSignal
+): Promise<RunAgentBriefResult> {
   const reply = await generateAssistantReply({
     agent: target,
     history: [],
     userText: brief,
-    messageAgentEnabled: false,
-    nestingDepth: 1,
+    agentMessageChain: chain,
+    inboundAgentMessageId: chain.parentMessageId ?? undefined,
     streamTokens: false,
+    abortSignal: signal,
   });
-  return { content: reply.content };
+  return { content: reply.content, toolLog: reply.toolLog };
 }
 
 async function executeOneTool(
@@ -567,6 +605,11 @@ async function executeOneTool(
     fromAgent: AgentVoice;
     toolsGranted?: boolean;
     stream?: boolean;
+    senderThreadId?: string;
+    senderToolLogId?: string;
+    agentMessageChain?: AgentMessageChainContext;
+    inboundAgentMessageId?: string;
+    abortSignal?: AbortSignal;
     onNeedsApproval?: (info: {
       approvalId: string;
       command: string;
@@ -576,8 +619,14 @@ async function executeOneTool(
 ): Promise<unknown> {
   if (name === "message_agent") {
     return executeMessageAgent(
-      { agent: args.agent, brief: args.brief },
-      { fromAgent: opts.fromAgent },
+      { agent: args.agent, brief: args.brief, wait: args.wait },
+      {
+        fromAgent: opts.fromAgent,
+        senderThreadId: opts.senderThreadId,
+        senderToolLogId: opts.senderToolLogId,
+        chain: opts.agentMessageChain,
+        inboundAgentMessageId: opts.inboundAgentMessageId,
+      },
       runAgentBrief
     );
   }
@@ -615,10 +664,11 @@ export async function generateAssistantReply(opts: {
   userText: string;
   onEvent?: (event: StreamEvent) => void;
   streamTokens?: boolean;
-  /** Nested agent runs disable message_agent to avoid chains (1-hop only). */
   messageAgentEnabled?: boolean;
-  /** Depth of nested message_agent calls; depth >= 1 disables further handoffs. */
-  nestingDepth?: number;
+  agentMessageChain?: AgentMessageChainContext;
+  inboundAgentMessageId?: string;
+  senderThreadId?: string;
+  abortSignal?: AbortSignal;
 }): Promise<LlmResult> {
   await ensurePluginsLoaded();
   await ensureSeedAgents();
@@ -629,6 +679,10 @@ export async function generateAssistantReply(opts: {
   const pluginContext = await getPluginContext({ toolsGranted });
   const modelId = opts.agent.modelId?.trim() || "";
   const emit = opts.onEvent;
+
+  if (opts.senderThreadId) {
+    beginDeferringAgentThreadPosts(opts.senderThreadId);
+  }
 
   if (!apiKey) {
     const content = buildOfflineReply(opts.agent, opts.userText);
@@ -641,9 +695,10 @@ export async function generateAssistantReply(opts: {
   }
 
   const model = modelId || "openai/gpt-4o-mini";
-  const nestingDepth = opts.nestingDepth ?? 0;
+  const hopCount = opts.agentMessageChain?.hopCount ?? 0;
+  const maxHops = getMaxAgentMessageHops();
   const messageAgentEnabled =
-    opts.messageAgentEnabled !== false && nestingDepth < 1;
+    opts.messageAgentEnabled !== false && hopCount < maxHops;
   const system = buildSystemPrompt(
     opts.agent,
     toolsGranted,
@@ -668,11 +723,13 @@ export async function generateAssistantReply(opts: {
   ];
 
   const toolLog: ToolLogEntry[] = [];
+  const pendingAgentMessageIds: string[] = [];
   const maxRounds = toolDefs ? 4 : 1;
   let finalContent = "";
   const wantStream = Boolean(opts.streamTokens && emit);
 
   for (let round = 0; round < maxRounds; round++) {
+    throwIfAborted(opts.abortSignal);
     const fsIntent = detectFsIntent(opts.userText);
     const wantsCollaboration = detectCollaborationIntent(opts.userText);
     const forceFsTools =
@@ -701,6 +758,7 @@ export async function generateAssistantReply(opts: {
           tools: toolDefs,
           toolChoice,
           onToken: (text) => emit?.({ type: "token", text }),
+          abortSignal: opts.abortSignal,
         })
       : await callOpenRouter({
           apiKey,
@@ -708,6 +766,7 @@ export async function generateAssistantReply(opts: {
           messages,
           tools: toolDefs,
           toolChoice,
+          abortSignal: opts.abortSignal,
         });
 
     const msg = choice.message;
@@ -761,11 +820,16 @@ export async function generateAssistantReply(opts: {
       const args = parseToolArgs(call.function?.arguments);
 
       if (name === MESSAGE_AGENT_TOOL_ID) {
-        const pendingDetail = await messageAgentPendingDetail(args.agent);
+        const willQueue =
+          args.wait !== true && !opts.inboundAgentMessageId;
+        const pendingDetail = await messageAgentPendingDetail(
+          args.agent,
+          willQueue ? "queued" : "consulting"
+        );
         const pendingEntry: ToolLogEntry = {
           id: logId,
           name: MESSAGE_AGENT_TOOL_ID,
-          status: "running",
+          status: willQueue ? "queued" : "running",
           detail: pendingDetail,
         };
         upsertLog(toolLog, pendingEntry);
@@ -778,10 +842,16 @@ export async function generateAssistantReply(opts: {
         });
       }
 
+      throwIfAborted(opts.abortSignal);
       const result = await executeOneTool(name, args, {
         fromAgent: opts.agent,
         toolsGranted,
         stream: wantStream,
+        senderThreadId: opts.senderThreadId,
+        senderToolLogId: logId,
+        agentMessageChain: opts.agentMessageChain,
+        inboundAgentMessageId: opts.inboundAgentMessageId,
+        abortSignal: opts.abortSignal,
         onNeedsApproval: (info) => {
           const entry: ToolLogEntry = {
             id: logId,
@@ -802,7 +872,7 @@ export async function generateAssistantReply(opts: {
         },
       });
 
-      const status = statusFromResult(result);
+      const status = statusFromResult(result, name);
       const detail =
         name === "message_agent"
           ? messageAgentDetail(
@@ -813,11 +883,19 @@ export async function generateAssistantReply(opts: {
         name === "read_file" &&
         (result as { ok?: boolean; truncated?: boolean }).ok === true &&
         (result as { truncated?: boolean }).truncated === true;
+      const queuedId =
+        name === MESSAGE_AGENT_TOOL_ID &&
+        (result as { ok?: boolean; queued?: boolean }).ok === true &&
+        (result as { queued?: boolean }).queued === true
+          ? (result as { messageId: string }).messageId
+          : undefined;
+      if (queuedId) pendingAgentMessageIds.push(queuedId);
       const entry: ToolLogEntry = {
         id: logId,
         name: name || "tool",
         status,
         detail,
+        agentMessageId: queuedId,
         approvalId:
           status === "needs_approval"
             ? (result as { approvalId?: string }).approvalId
@@ -849,10 +927,16 @@ export async function generateAssistantReply(opts: {
           model,
           messages,
           onToken: (t) => emit?.({ type: "token", text: t }),
+          abortSignal: opts.abortSignal,
         });
         finalContent = (last.message?.content || text || "(empty response)").trim();
       } else {
-        const last = await callOpenRouter({ apiKey, model, messages });
+        const last = await callOpenRouter({
+          apiKey,
+          model,
+          messages,
+          abortSignal: opts.abortSignal,
+        });
         finalContent = (last.message?.content || text || "(empty response)").trim();
         if (finalContent && emit) emit({ type: "token", text: finalContent });
       }
@@ -861,6 +945,38 @@ export async function generateAssistantReply(opts: {
 
   if (!finalContent) {
     finalContent = "(empty response)";
+  }
+
+  if (pendingAgentMessageIds.length > 0) {
+    await awaitAgentMessageDispatches(
+      pendingAgentMessageIds,
+      (update) => {
+      const chipStatus =
+        update.status === "done"
+          ? "ran"
+          : update.status === "failed"
+            ? "error"
+            : update.status === "running"
+              ? "running"
+              : "queued";
+      for (const entry of toolLog) {
+        if (entry.agentMessageId !== update.messageId) continue;
+        entry.status = chipStatus as ToolLogEntry["status"];
+        if (update.detail) entry.detail = update.detail;
+        if (update.error && update.status === "failed") {
+          entry.detail = update.error.slice(0, 180);
+        }
+        emit?.({
+          type: "tool",
+          id: entry.id,
+          name: entry.name,
+          status: entry.status,
+          detail: entry.detail,
+        });
+      }
+    },
+      getAgentMessageSenderWaitTimeoutMs()
+    );
   }
 
   const hintIds = Array.from(

@@ -57,22 +57,34 @@ export function MessageBubble({
   approvalBusy?: boolean;
 }) {
   const isUser = message.role === "user";
+  const isAgentReply = message.role === "agent_reply";
   const hints = parseHints(message.toolHints);
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div
+      className={`flex ${
+        isUser ? "justify-end" : isAgentReply ? "justify-center" : "justify-start"
+      }`}
+    >
       <div
         className={`max-w-[min(42rem,92%)] rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
           isUser
             ? "rounded-br-md bg-ink-foam/10 text-ink-foam ring-1 ring-ink-foam/15"
-            : "rounded-bl-md bg-ink-panel text-ink-foam/95 ring-1 ring-ink-line/50"
+            : isAgentReply
+              ? "rounded-md border border-dashed border-violet-400/35 bg-violet-950/20 text-[13px] text-ink-mist"
+              : "rounded-bl-md bg-ink-panel text-ink-foam/95 ring-1 ring-ink-line/50"
         }`}
         style={
-          !isUser
+          !isUser && !isAgentReply
             ? { boxShadow: `inset 3px 0 0 0 ${accent}` }
             : undefined
         }
       >
+        {isAgentReply && (
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-violet-300/90">
+            Colleague reply
+          </div>
+        )}
         <div className="whitespace-pre-wrap break-words">{message.content}</div>
         {hints.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">

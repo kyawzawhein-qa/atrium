@@ -27,8 +27,8 @@ before(async () => {
   purgeExpiredApprovals = store.purgeExpiredApprovals;
 });
 
-after(() => {
-  testDb.cleanup();
+after(async () => {
+  await testDb.cleanup();
 });
 
 test("pending approval round-trips from SQLite", async () => {

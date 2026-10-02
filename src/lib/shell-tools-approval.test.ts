@@ -60,8 +60,8 @@ before(async () => {
   });
 });
 
-after(() => {
-  testDb.cleanup();
+after(async () => {
+  await testDb.cleanup();
 });
 
 function approveRequest(

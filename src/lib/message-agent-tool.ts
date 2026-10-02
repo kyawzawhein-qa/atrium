@@ -3,8 +3,16 @@
  * and returns a reply to A. Does not merge tool access between agents.
  */
 
+import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
-import type { AgentVoice } from "./llm";
+import type { AgentVoice, ToolLogEntry } from "./llm";
+import { getAgentMessageRateLimitPerMinute, getMaxAgentMessageHops } from "./agent-message-config";
+import {
+  ensureAgentMessageBootBeforeCreate,
+  enqueueAgentMessageDispatch,
+} from "./agent-message-dispatcher";
+import { getAgentMessageBootId } from "./agent-message-boot";
+import { markAgentMessageFailed } from "./agent-message-notify";
 
 export const MESSAGE_AGENT_TOOL_ID = "message_agent";
 
@@ -39,7 +47,7 @@ export function messageAgentToolDefinition() {
     function: {
       name: MESSAGE_AGENT_TOOL_ID,
       description:
-        "Send a short brief to another Atrium agent by slug or name (e.g. senior-developer, Mara, Theo Rios). They answer in their own persona and model; you receive their reply text only.",
+        "Send a short brief to another Atrium agent by slug or name (e.g. senior-developer, Mara, Theo Rios). They answer in their own persona and model; you receive their reply text (async by default, or set wait:true to block until they answer).",
       parameters: {
         type: "object",
         properties: {
@@ -52,6 +60,11 @@ export function messageAgentToolDefinition() {
             type: "string",
             description: "Task or question for that agent (keep it concise)",
           },
+          wait: {
+            type: "boolean",
+            description:
+              "When true, block until the other agent replies (legacy synchronous behaviour). Default false queues the message.",
+          },
         },
         required: ["agent", "brief"],
       },
@@ -62,10 +75,23 @@ export function messageAgentToolDefinition() {
 export type MessageAgentArgs = {
   agent?: string;
   brief?: string;
+  wait?: boolean;
+};
+
+export type AgentMessageChainContext = {
+  threadId: string;
+  hopCount: number;
+  chainSlugs: string[];
+  parentMessageId?: string | null;
 };
 
 export type MessageAgentContext = {
   fromAgent: AgentVoice;
+  senderThreadId?: string;
+  senderToolLogId?: string;
+  chain?: AgentMessageChainContext;
+  /** When executing inside a dispatcher run, the queued row id delivered to this agent. */
+  inboundAgentMessageId?: string;
 };
 
 export type MessageAgentSuccess = {
@@ -75,18 +101,39 @@ export type MessageAgentSuccess = {
   reply: string;
 };
 
+export type MessageAgentQueuedSuccess = {
+  ok: true;
+  queued: true;
+  messageId: string;
+};
+
 export type MessageAgentFailure = {
   ok: false;
-  code: "invalid" | "unknown_agent" | "self" | "empty_brief" | "agent_error";
+  code:
+    | "invalid"
+    | "unknown_agent"
+    | "self"
+    | "empty_brief"
+    | "agent_error"
+    | "rate_limited"
+    | "max_hops"
+    | "cycle";
   error: string;
 };
 
-export type MessageAgentResult = MessageAgentSuccess | MessageAgentFailure;
+export type MessageAgentResult =
+  | MessageAgentSuccess
+  | MessageAgentQueuedSuccess
+  | MessageAgentFailure;
+
+export type RunAgentBriefResult = { content: string; toolLog?: ToolLogEntry[] };
 
 export type RunAgentBrief = (
   target: AgentVoice,
-  brief: string
-) => Promise<{ content: string }>;
+  brief: string,
+  chain: AgentMessageChainContext,
+  signal?: AbortSignal
+) => Promise<RunAgentBriefResult>;
 
 function normalizeLookupKey(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_]+/g, " ");
@@ -161,15 +208,98 @@ export function agentToVoice(agent: {
   };
 }
 
+export async function walkParentChainSlugs(
+  parentMessageId: string | null,
+  fromAgentSlug: string
+): Promise<string[]> {
+  if (!parentMessageId) return [fromAgentSlug];
+  const parent = await prisma.agentMessage.findUnique({ where: { id: parentMessageId } });
+  if (!parent) return [fromAgentSlug];
+  const ancestors = await walkParentChainSlugs(parent.parentMessageId, parent.fromAgentSlug);
+  if (!ancestors.includes(parent.toAgentSlug)) ancestors.push(parent.toAgentSlug);
+  if (!ancestors.includes(fromAgentSlug)) ancestors.push(fromAgentSlug);
+  return ancestors;
+}
+
+export async function buildChainSlugsForMessageRow(row: {
+  chainSlugsJson: string;
+  fromAgentSlug: string;
+  parentMessageId: string | null;
+}): Promise<string[]> {
+  try {
+    const parsed = JSON.parse(row.chainSlugsJson) as unknown;
+    if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string") && parsed.length > 0) {
+      return parsed as string[];
+    }
+  } catch {
+    /* use parent walk */
+  }
+  return walkParentChainSlugs(row.parentMessageId, row.fromAgentSlug);
+}
+
+/** @deprecated use buildChainSlugsForMessageRow */
+export async function buildChainSlugsForThread(threadId: string): Promise<string[]> {
+  const latest = await prisma.agentMessage.findFirst({
+    where: { threadId },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!latest) return [];
+  return buildChainSlugsForMessageRow(latest);
+}
+
+function nextHopCount(ctx: MessageAgentContext): number {
+  return (ctx.chain?.hopCount ?? 0) + 1;
+}
+
+function chainSlugsForSend(ctx: MessageAgentContext, toSlug: string): string[] {
+  const base = ctx.chain?.chainSlugs ?? [ctx.fromAgent.slug];
+  const slugs = [...base];
+  if (!slugs.includes(ctx.fromAgent.slug)) slugs.push(ctx.fromAgent.slug);
+  if (!slugs.includes(toSlug)) slugs.push(toSlug);
+  return slugs;
+}
+
+type CreateAgentMessageData = {
+  fromAgentSlug: string;
+  toAgentSlug: string;
+  threadId: string;
+  parentMessageId: string | null;
+  hopCount: number;
+  chainSlugsJson: string;
+  body: string;
+  status: string;
+  senderThreadId: string | null;
+  senderToolLogId: string | null;
+  bootId: string;
+};
+
+async function createAgentMessageWithRateLimit(
+  data: CreateAgentMessageData
+): Promise<{ id: string } | null> {
+  const limit = getAgentMessageRateLimitPerMinute();
+  const since = new Date(Date.now() - 60_000);
+  return prisma.$transaction(async (tx) => {
+    const count = await tx.agentMessage.count({
+      where: { fromAgentSlug: data.fromAgentSlug, createdAt: { gte: since } },
+    });
+    if (count >= limit) return null;
+    return tx.agentMessage.create({ data });
+  });
+}
+
 /** Detail shown while a nested agent run is in flight. */
-export async function messageAgentPendingDetail(agentKey?: string): Promise<string> {
+export async function messageAgentPendingDetail(
+  agentKey?: string,
+  phase: "consulting" | "queued" = "consulting"
+): Promise<string> {
+  const suffix = phase === "queued" ? "queued…" : "consulting…";
   const key = agentKey?.trim();
-  if (!key) return "→ (agent): consulting…";
+  if (!key) return `→ (agent): ${suffix}`;
   const target = await resolveTargetAgent(key);
   if (target) {
-    return `→ ${target.name} (${target.slug}): consulting…`;
+    return `→ ${target.name} (${target.slug}): ${suffix}`;
   }
-  return `→ ${key}: consulting…`;
+  return `→ ${key}: ${suffix}`;
 }
 
 export async function executeMessageAgent(
@@ -179,6 +309,14 @@ export async function executeMessageAgent(
 ): Promise<MessageAgentResult> {
   const targetKey = args.agent?.trim() || "";
   const brief = args.brief?.trim() || "";
+  const wait = args.wait === true;
+  const inboundMessageId =
+    ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? undefined;
+  const insideReceiver = Boolean(inboundMessageId);
+  /** Nested hops inside a receiver run must block until the callee answers (phase 1). */
+  const effectiveWait = wait || insideReceiver;
+
+  await ensureAgentMessageBootBeforeCreate();
 
   if (!targetKey) {
     return { ok: false, code: "invalid", error: "agent is required" };
@@ -204,26 +342,111 @@ export async function executeMessageAgent(
     };
   }
 
+  const hopCount = nextHopCount(ctx);
+  const maxHops = getMaxAgentMessageHops();
+  if (hopCount > maxHops) {
+    return {
+      ok: false,
+      code: "max_hops",
+      error: `Message chain exceeded max hops (${maxHops}).`,
+    };
+  }
+
+  const priorSlugs = ctx.chain?.chainSlugs ?? [ctx.fromAgent.slug];
+  if (priorSlugs.includes(target.slug)) {
+    return {
+      ok: false,
+      code: "cycle",
+      error: `Refusing ping-pong: ${target.slug} is already in this message chain.`,
+    };
+  }
+
+  const threadId = ctx.chain?.threadId ?? randomUUID();
+  const chainSlugs = chainSlugsForSend(ctx, target.slug);
+  const chain: AgentMessageChainContext = {
+    threadId,
+    hopCount,
+    chainSlugs,
+    parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
+  };
+
+  const row = await createAgentMessageWithRateLimit({
+    fromAgentSlug: ctx.fromAgent.slug,
+    toAgentSlug: target.slug,
+    threadId,
+    parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
+    hopCount,
+    chainSlugsJson: JSON.stringify(chainSlugs),
+    body: brief,
+    status: effectiveWait ? "running" : "queued",
+    senderThreadId: ctx.senderThreadId ?? null,
+    senderToolLogId: ctx.senderToolLogId ?? null,
+    bootId: getAgentMessageBootId(),
+  });
+
+  if (!row) {
+    return {
+      ok: false,
+      code: "rate_limited",
+      error: "Outbound agent message rate limit exceeded. Try again in a minute.",
+    };
+  }
+
+  if (!effectiveWait) {
+    enqueueAgentMessageDispatch(row.id);
+    return { ok: true, queued: true, messageId: row.id };
+  }
+
   try {
     const voice = agentToVoice(target);
-    const { content } = await runBrief(voice, brief);
+    const receiveChain: AgentMessageChainContext = {
+      ...chain,
+      parentMessageId: row.id,
+    };
+    const { content, toolLog } = await runBrief(voice, brief, receiveChain);
+    const trimmed = content.trim() || "(empty response)";
+    await prisma.agentMessage.update({
+      where: { id: row.id },
+      data: {
+        status: "done",
+        reply: trimmed,
+        error: null,
+        receiverToolLog: toolLog && toolLog.length > 0 ? JSON.stringify(toolLog) : null,
+      },
+    });
     return {
       ok: true,
       agent: target.name,
       slug: target.slug,
-      reply: content.trim() || "(empty response)",
+      reply: trimmed,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Agent run failed";
-    return { ok: false, code: "agent_error", error: message.slice(0, 220) };
+    const errText = message.slice(0, 220);
+    await markAgentMessageFailed(row.id, errText);
+    return { ok: false, code: "agent_error", error: errText };
   }
 }
 
 export function messageAgentDetail(result: MessageAgentResult): string {
-  if (result.ok) {
+  if (result.ok && "queued" in result && result.queued) {
+    return `→ queued (message ${result.messageId.slice(0, 8)}…)`;
+  }
+  if (result.ok && "reply" in result) {
     const preview =
       result.reply.length > 120 ? result.reply.slice(0, 117) + "…" : result.reply;
     return `→ ${result.agent} (${result.slug}): ${preview}`;
   }
-  return result.error.slice(0, 180);
+  if (!result.ok) {
+    return result.error.slice(0, 180);
+  }
+  return "";
+}
+
+export function toolStatusForMessageAgentResult(
+  result: MessageAgentResult
+): "queued" | "ran" | "error" {
+  if (!result.ok) return "error";
+  if ("queued" in result && result.queued) return "queued";
+  return "ran";
 }
