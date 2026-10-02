@@ -92,6 +92,8 @@ model AgentMessage {
   senderToolLogId String?
   /// Idempotent failure notification on sender thread (recovery sweep).
   senderNotified  Boolean  @default(false)
+  /// Process boot that created this row (recovery ignores current-boot in-flight rows).
+  bootId          String   @default("")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

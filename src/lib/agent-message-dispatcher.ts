@@ -21,6 +21,11 @@ import {
   notifySenderAgentReplySuccess,
 } from "./agent-message-notify";
 import { appendReceiverToolSummary, summarizeReceiverToolLog } from "./receiver-tool-summary";
+import {
+  getAgentMessageBootId,
+  hasAgentMessageSweepCompleted,
+  markAgentMessageSweepCompleted,
+} from "./agent-message-boot";
 
 export type AgentMessageToolStatus = "queued" | "running" | "done" | "failed";
 
@@ -130,9 +135,18 @@ function clearTrackedTimeout(timer: ReturnType<typeof setTimeout>): void {
 
 export async function bootAgentMessageDispatcher(): Promise<void> {
   if (bootDisabledForTests) return;
+  if (hasAgentMessageSweepCompleted()) return;
   if (bootPromise) return bootPromise;
-  bootPromise = runStartupSweep();
+  bootPromise = runStartupSweep().then(() => {
+    markAgentMessageSweepCompleted();
+  });
   return bootPromise;
+}
+
+/** Must complete before inserting new inbox rows (also runs at server boot). */
+export async function ensureAgentMessageBootBeforeCreate(): Promise<void> {
+  if (bootDisabledForTests) return;
+  await bootAgentMessageDispatcher();
 }
 
 export async function runAgentMessageRecoverySweepForTests(): Promise<void> {
@@ -148,6 +162,7 @@ export async function runAgentMessageRecoverySweepForTests(): Promise<void> {
 async function runStartupSweep(): Promise<void> {
   const timeoutMs = getAgentMessageDispatchTimeoutMs();
   const staleBefore = new Date(Date.now() - timeoutMs);
+  const currentBootId = getAgentMessageBootId();
 
   const rows = await prisma.agentMessage.findMany({
     where: {
@@ -159,7 +174,10 @@ async function runStartupSweep(): Promise<void> {
   const toDispatch: string[] = [];
 
   for (const row of rows) {
-    const stale = row.createdAt < staleBefore;
+    const rowBootId = row.bootId || "";
+    const isCurrentBoot = rowBootId !== "" && rowBootId === currentBootId;
+    const isPriorBoot = rowBootId === "" || rowBootId !== currentBootId;
+
     if (row.status === "failed") {
       if (!row.senderNotified) {
         await notifySenderAgentReplyFailure(row, row.error ?? "Agent message failed.");
@@ -167,6 +185,19 @@ async function runStartupSweep(): Promise<void> {
       continue;
     }
 
+    // In-flight wait:true handoffs on this process boot must not be re-dispatched.
+    if (row.status === "running" && isCurrentBoot) {
+      continue;
+    }
+
+    if (!isPriorBoot) {
+      if (row.status === "queued") {
+        toDispatch.push(row.id);
+      }
+      continue;
+    }
+
+    const stale = row.createdAt < staleBefore;
     if (stale) {
       const err = "Agent message exceeded timeout during server recovery.";
       await prisma.agentMessage.update({

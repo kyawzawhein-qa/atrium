@@ -12,6 +12,7 @@ import {
   type ToolLogEntry,
 } from "@/lib/llm";
 import { mapThreadMessagesToChatHistory } from "@/lib/thread-history";
+import { flushDeferredAgentThreadPosts } from "@/lib/agent-message-notify";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -134,6 +135,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             toolLog: reply.toolLog,
             content: reply.content,
           });
+          await flushDeferredAgentThreadPosts(thread.id);
         } catch (err) {
           const message = err instanceof Error ? err.message : "LLM error";
           const assistantMessage = await prisma.message.create({
@@ -150,6 +152,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             toolLog: [],
             content: `I hit a provider error: ${message}. Check Settings → OpenRouter key and this agent's model.`,
           });
+          await flushDeferredAgentThreadPosts(thread.id);
         } finally {
           controller.close();
         }
@@ -214,6 +217,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ...(titleUpdate ? { title: titleUpdate } : {}),
     },
   });
+
+  await flushDeferredAgentThreadPosts(thread.id);
 
   const refreshed = await prisma.thread.findUnique({
     where: { id },

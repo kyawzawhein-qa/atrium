@@ -7,7 +7,11 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
 import type { AgentVoice, ToolLogEntry } from "./llm";
 import { getAgentMessageRateLimitPerMinute, getMaxAgentMessageHops } from "./agent-message-config";
-import { enqueueAgentMessageDispatch } from "./agent-message-dispatcher";
+import {
+  ensureAgentMessageBootBeforeCreate,
+  enqueueAgentMessageDispatch,
+} from "./agent-message-dispatcher";
+import { getAgentMessageBootId } from "./agent-message-boot";
 import { markAgentMessageFailed } from "./agent-message-notify";
 
 export const MESSAGE_AGENT_TOOL_ID = "message_agent";
@@ -266,6 +270,7 @@ type CreateAgentMessageData = {
   status: string;
   senderThreadId: string | null;
   senderToolLogId: string | null;
+  bootId: string;
 };
 
 async function createAgentMessageWithRateLimit(
@@ -305,9 +310,13 @@ export async function executeMessageAgent(
   const targetKey = args.agent?.trim() || "";
   const brief = args.brief?.trim() || "";
   const wait = args.wait === true;
-  const insideReceiver = Boolean(ctx.inboundAgentMessageId);
+  const inboundMessageId =
+    ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? undefined;
+  const insideReceiver = Boolean(inboundMessageId);
   /** Nested hops inside a receiver run must block until the callee answers (phase 1). */
   const effectiveWait = wait || insideReceiver;
+
+  await ensureAgentMessageBootBeforeCreate();
 
   if (!targetKey) {
     return { ok: false, code: "invalid", error: "agent is required" };
@@ -372,6 +381,7 @@ export async function executeMessageAgent(
     status: effectiveWait ? "running" : "queued",
     senderThreadId: ctx.senderThreadId ?? null,
     senderToolLogId: ctx.senderToolLogId ?? null,
+    bootId: getAgentMessageBootId(),
   });
 
   if (!row) {
@@ -389,7 +399,11 @@ export async function executeMessageAgent(
 
   try {
     const voice = agentToVoice(target);
-    const { content, toolLog } = await runBrief(voice, brief, chain);
+    const receiveChain: AgentMessageChainContext = {
+      ...chain,
+      parentMessageId: row.id,
+    };
+    const { content, toolLog } = await runBrief(voice, brief, receiveChain);
     const trimmed = content.trim() || "(empty response)";
     await prisma.agentMessage.update({
       where: { id: row.id },

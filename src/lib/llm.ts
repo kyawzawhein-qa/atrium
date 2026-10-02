@@ -20,10 +20,7 @@ import {
   getMaxAgentMessageHops,
   getAgentMessageSenderWaitTimeoutMs,
 } from "./agent-message-config";
-import {
-  beginDeferringAgentThreadPosts,
-  flushDeferredAgentThreadPosts,
-} from "./agent-message-notify";
+import { beginDeferringAgentThreadPosts } from "./agent-message-notify";
 import { ensureSeedAgents } from "./seed-agents";
 import {
   runShellWithApprovalGate,
@@ -687,7 +684,6 @@ export async function generateAssistantReply(opts: {
     beginDeferringAgentThreadPosts(opts.senderThreadId);
   }
 
-  try {
   if (!apiKey) {
     const content = buildOfflineReply(opts.agent, opts.userText);
     return {
@@ -993,9 +989,4 @@ export async function generateAssistantReply(opts: {
     toolHints: hintIds,
     provider: "openrouter",
   };
-  } finally {
-    if (opts.senderThreadId) {
-      await flushDeferredAgentThreadPosts(opts.senderThreadId);
-    }
-  }
 }

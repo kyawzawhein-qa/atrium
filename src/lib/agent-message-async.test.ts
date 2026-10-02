@@ -13,6 +13,7 @@ import {
   runAgentMessageRecoverySweepForTests,
 } from "./agent-message-dispatcher";
 import { prisma } from "./prisma";
+import { getAgentMessageBootId } from "./agent-message-boot";
 
 const testDb = createTestDb();
 
@@ -344,6 +345,7 @@ test("recovery sweep re-queues stuck running and notifies stale failures", async
       body: "stale",
       status: "running",
       senderThreadId: thread.id,
+      bootId: "prior-boot-sweep-test",
       createdAt: new Date(Date.now() - 600_000),
     },
   });
@@ -356,6 +358,7 @@ test("recovery sweep re-queues stuck running and notifies stale failures", async
       body: "stuck",
       status: "running",
       senderThreadId: thread.id,
+      bootId: "prior-boot-sweep-test",
     },
   });
 
@@ -467,6 +470,71 @@ test("mixed wait then async cannot loop back to prior agent", async () => {
   assert.equal(loop.ok, false);
   if (loop.ok) throw new Error("expected cycle");
   assert.equal(loop.code, "cycle");
+});
+
+test("recovery sweep leaves current-boot wait:true running row untouched", async () => {
+  const bootId = getAgentMessageBootId();
+  const row = await prisma.agentMessage.create({
+    data: {
+      fromAgentSlug: "agent-a",
+      toAgentSlug: "agent-b",
+      threadId: "current-boot-running",
+      hopCount: 1,
+      body: "in flight",
+      status: "running",
+      bootId,
+    },
+  });
+  await runAgentMessageRecoverySweepForTests();
+  const after = await prisma.agentMessage.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(after.status, "running");
+});
+
+test("recovery sweep requeues prior-boot running row", async () => {
+  const row = await prisma.agentMessage.create({
+    data: {
+      fromAgentSlug: "agent-a",
+      toAgentSlug: "agent-b",
+      threadId: "prior-boot-running",
+      hopCount: 1,
+      body: "orphan",
+      status: "running",
+      bootId: "dead-process-boot-id",
+    },
+  });
+  await runAgentMessageRecoverySweepForTests();
+  const after = await prisma.agentMessage.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(after.status, "queued");
+});
+
+test("top-level wait:true delivers nested B→C reply to A", async () => {
+  const marker = "WAIT-NESTED-C-MARKER-99";
+  const runBrief: RunAgentBrief = async (target, _brief, chain) => {
+    if (target.slug !== "agent-b") {
+      return { content: "unexpected target" };
+    }
+    const nested = await executeMessageAgent(
+      { agent: "agent-c", brief: "from B" },
+      { fromAgent: target, chain },
+      async (t) => {
+        if (t.slug === "agent-c") return { content: marker };
+        return { content: "wrong target" };
+      }
+    );
+    if (!nested.ok || !("reply" in nested)) {
+      throw new Error("nested handoff failed");
+    }
+    return { content: nested.reply };
+  };
+
+  const top = await executeMessageAgent(
+    { agent: "agent-b", brief: "start wait chain", wait: true },
+    { fromAgent: fromA },
+    runBrief
+  );
+  assert.equal(top.ok, true);
+  if (!top.ok || !("reply" in top)) throw new Error("expected sync top");
+  assert.match(top.reply, new RegExp(marker));
 });
 
 test("receiver tool log is stored on agent message row", async () => {
