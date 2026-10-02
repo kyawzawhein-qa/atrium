@@ -20,8 +20,8 @@ before(async () => {
   ({ ensureOperatorToken } = await import("./settings"));
 });
 
-after(() => {
-  testDb.cleanup();
+after(async () => {
+  await testDb.cleanup();
 });
 
 function req(

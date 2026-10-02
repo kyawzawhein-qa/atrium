@@ -5,7 +5,11 @@ import type { PrismaClient } from "@prisma/client";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { disableAgentMessageDispatcherBootForTests } from "./agent-message-dispatcher";
+import {
+  disableAgentMessageDispatcherBootForTests,
+  drainAgentMessageDispatcherForTests,
+  resetAgentMessageDispatcherForTests,
+} from "./agent-message-dispatcher";
 
 disableAgentMessageDispatcherBootForTests();
 
@@ -17,18 +21,18 @@ const projectRoot = path.resolve(
 export type TestDb = {
   dir: string;
   url: string;
-  cleanup: () => void;
+  cleanup: () => Promise<void>;
 };
 
-function resetPrismaSingleton(): void {
+async function resetPrismaSingleton(): Promise<void> {
   const globalForPrisma = globalThis as { prisma?: PrismaClient };
-  void globalForPrisma.prisma?.$disconnect();
+  await globalForPrisma.prisma?.$disconnect();
   delete globalForPrisma.prisma;
 }
 
 /** Ephemeral SQLite database with current Prisma schema (for unit tests). */
 export function createTestDb(): TestDb {
-  resetPrismaSingleton();
+  void resetPrismaSingleton();
   const dir = mkdtempSync(path.join(os.tmpdir(), "atrium-test-"));
   const dbPath = path.join(dir, `test-${randomUUID()}.db`);
   const url = `file:${dbPath}`;
@@ -41,14 +45,11 @@ export function createTestDb(): TestDb {
   return {
     dir,
     url,
-    cleanup: () => {
-      resetPrismaSingleton();
-      try {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code !== "EBUSY" && code !== "EPERM") throw err;
-      }
+    cleanup: async () => {
+      await drainAgentMessageDispatcherForTests();
+      await resetAgentMessageDispatcherForTests();
+      await resetPrismaSingleton();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
     },
   };
 }

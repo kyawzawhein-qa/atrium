@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
-import type { AgentVoice } from "./llm";
+import type { AgentVoice, ToolLogEntry } from "./llm";
 import { getAgentMessageRateLimitPerMinute, getMaxAgentMessageHops } from "./agent-message-config";
 import { enqueueAgentMessageDispatch } from "./agent-message-dispatcher";
 import { markAgentMessageFailed } from "./agent-message-notify";
@@ -122,12 +122,14 @@ export type MessageAgentResult =
   | MessageAgentQueuedSuccess
   | MessageAgentFailure;
 
+export type RunAgentBriefResult = { content: string; toolLog?: ToolLogEntry[] };
+
 export type RunAgentBrief = (
   target: AgentVoice,
   brief: string,
   chain: AgentMessageChainContext,
   signal?: AbortSignal
-) => Promise<{ content: string }>;
+) => Promise<RunAgentBriefResult>;
 
 function normalizeLookupKey(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_]+/g, " ");
@@ -202,18 +204,43 @@ export function agentToVoice(agent: {
   };
 }
 
-export async function buildChainSlugsForThread(threadId: string): Promise<string[]> {
-  const rows = await prisma.agentMessage.findMany({
-    where: { threadId },
-    orderBy: { createdAt: "asc" },
-    select: { fromAgentSlug: true, toAgentSlug: true },
-  });
-  const slugs: string[] = [];
-  for (const row of rows) {
-    if (!slugs.includes(row.fromAgentSlug)) slugs.push(row.fromAgentSlug);
-    if (!slugs.includes(row.toAgentSlug)) slugs.push(row.toAgentSlug);
+export async function walkParentChainSlugs(
+  parentMessageId: string | null,
+  fromAgentSlug: string
+): Promise<string[]> {
+  if (!parentMessageId) return [fromAgentSlug];
+  const parent = await prisma.agentMessage.findUnique({ where: { id: parentMessageId } });
+  if (!parent) return [fromAgentSlug];
+  const ancestors = await walkParentChainSlugs(parent.parentMessageId, parent.fromAgentSlug);
+  if (!ancestors.includes(parent.toAgentSlug)) ancestors.push(parent.toAgentSlug);
+  if (!ancestors.includes(fromAgentSlug)) ancestors.push(fromAgentSlug);
+  return ancestors;
+}
+
+export async function buildChainSlugsForMessageRow(row: {
+  chainSlugsJson: string;
+  fromAgentSlug: string;
+  parentMessageId: string | null;
+}): Promise<string[]> {
+  try {
+    const parsed = JSON.parse(row.chainSlugsJson) as unknown;
+    if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string") && parsed.length > 0) {
+      return parsed as string[];
+    }
+  } catch {
+    /* use parent walk */
   }
-  return slugs;
+  return walkParentChainSlugs(row.parentMessageId, row.fromAgentSlug);
+}
+
+/** @deprecated use buildChainSlugsForMessageRow */
+export async function buildChainSlugsForThread(threadId: string): Promise<string[]> {
+  const latest = await prisma.agentMessage.findFirst({
+    where: { threadId },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!latest) return [];
+  return buildChainSlugsForMessageRow(latest);
 }
 
 function nextHopCount(ctx: MessageAgentContext): number {
@@ -228,13 +255,31 @@ function chainSlugsForSend(ctx: MessageAgentContext, toSlug: string): string[] {
   return slugs;
 }
 
-export async function checkOutboundRateLimit(fromSlug: string): Promise<boolean> {
+type CreateAgentMessageData = {
+  fromAgentSlug: string;
+  toAgentSlug: string;
+  threadId: string;
+  parentMessageId: string | null;
+  hopCount: number;
+  chainSlugsJson: string;
+  body: string;
+  status: string;
+  senderThreadId: string | null;
+  senderToolLogId: string | null;
+};
+
+async function createAgentMessageWithRateLimit(
+  data: CreateAgentMessageData
+): Promise<{ id: string } | null> {
   const limit = getAgentMessageRateLimitPerMinute();
   const since = new Date(Date.now() - 60_000);
-  const count = await prisma.agentMessage.count({
-    where: { fromAgentSlug: fromSlug, createdAt: { gte: since } },
+  return prisma.$transaction(async (tx) => {
+    const count = await tx.agentMessage.count({
+      where: { fromAgentSlug: data.fromAgentSlug, createdAt: { gte: since } },
+    });
+    if (count >= limit) return null;
+    return tx.agentMessage.create({ data });
   });
-  return count < limit;
 }
 
 /** Detail shown while a nested agent run is in flight. */
@@ -307,14 +352,6 @@ export async function executeMessageAgent(
     };
   }
 
-  if (!(await checkOutboundRateLimit(ctx.fromAgent.slug))) {
-    return {
-      ok: false,
-      code: "rate_limited",
-      error: "Outbound agent message rate limit exceeded. Try again in a minute.",
-    };
-  }
-
   const threadId = ctx.chain?.threadId ?? randomUUID();
   const chainSlugs = chainSlugsForSend(ctx, target.slug);
   const chain: AgentMessageChainContext = {
@@ -324,19 +361,26 @@ export async function executeMessageAgent(
     parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
   };
 
-  const row = await prisma.agentMessage.create({
-    data: {
-      fromAgentSlug: ctx.fromAgent.slug,
-      toAgentSlug: target.slug,
-      threadId,
-      parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
-      hopCount,
-      body: brief,
-      status: effectiveWait ? "running" : "queued",
-      senderThreadId: ctx.senderThreadId ?? null,
-      senderToolLogId: ctx.senderToolLogId ?? null,
-    },
+  const row = await createAgentMessageWithRateLimit({
+    fromAgentSlug: ctx.fromAgent.slug,
+    toAgentSlug: target.slug,
+    threadId,
+    parentMessageId: ctx.inboundAgentMessageId ?? ctx.chain?.parentMessageId ?? null,
+    hopCount,
+    chainSlugsJson: JSON.stringify(chainSlugs),
+    body: brief,
+    status: effectiveWait ? "running" : "queued",
+    senderThreadId: ctx.senderThreadId ?? null,
+    senderToolLogId: ctx.senderToolLogId ?? null,
   });
+
+  if (!row) {
+    return {
+      ok: false,
+      code: "rate_limited",
+      error: "Outbound agent message rate limit exceeded. Try again in a minute.",
+    };
+  }
 
   if (!effectiveWait) {
     enqueueAgentMessageDispatch(row.id);
@@ -345,11 +389,16 @@ export async function executeMessageAgent(
 
   try {
     const voice = agentToVoice(target);
-    const { content } = await runBrief(voice, brief, chain);
+    const { content, toolLog } = await runBrief(voice, brief, chain);
     const trimmed = content.trim() || "(empty response)";
     await prisma.agentMessage.update({
       where: { id: row.id },
-      data: { status: "done", reply: trimmed, error: null },
+      data: {
+        status: "done",
+        reply: trimmed,
+        error: null,
+        receiverToolLog: toolLog && toolLog.length > 0 ? JSON.stringify(toolLog) : null,
+      },
     });
     return {
       ok: true,

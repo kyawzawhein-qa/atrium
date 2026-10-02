@@ -15,7 +15,14 @@ import {
   type AgentMessageChainContext,
 } from "./message-agent-tool";
 import { awaitAgentMessageDispatches } from "./agent-message-dispatcher";
-import { getMaxAgentMessageHops } from "./agent-message-config";
+import {
+  getMaxAgentMessageHops,
+  getAgentMessageSenderWaitTimeoutMs,
+} from "./agent-message-config";
+import {
+  beginDeferringAgentThreadPosts,
+  flushDeferredAgentThreadPosts,
+} from "./agent-message-notify";
 import { ensureSeedAgents } from "./seed-agents";
 import {
   runShellWithApprovalGate,
@@ -590,7 +597,7 @@ async function runAgentBrief(
     streamTokens: false,
     abortSignal: signal,
   });
-  return { content: reply.content };
+  return { content: reply.content, toolLog: reply.toolLog };
 }
 
 async function executeOneTool(
@@ -675,6 +682,11 @@ export async function generateAssistantReply(opts: {
   const modelId = opts.agent.modelId?.trim() || "";
   const emit = opts.onEvent;
 
+  if (opts.senderThreadId) {
+    beginDeferringAgentThreadPosts(opts.senderThreadId);
+  }
+
+  try {
   if (!apiKey) {
     const content = buildOfflineReply(opts.agent, opts.userText);
     return {
@@ -811,11 +823,16 @@ export async function generateAssistantReply(opts: {
       const args = parseToolArgs(call.function?.arguments);
 
       if (name === MESSAGE_AGENT_TOOL_ID) {
-        const pendingDetail = await messageAgentPendingDetail(args.agent);
+        const willQueue =
+          args.wait !== true && !opts.inboundAgentMessageId;
+        const pendingDetail = await messageAgentPendingDetail(
+          args.agent,
+          willQueue ? "queued" : "consulting"
+        );
         const pendingEntry: ToolLogEntry = {
           id: logId,
           name: MESSAGE_AGENT_TOOL_ID,
-          status: "running",
+          status: willQueue ? "queued" : "running",
           detail: pendingDetail,
         };
         upsertLog(toolLog, pendingEntry);
@@ -934,7 +951,9 @@ export async function generateAssistantReply(opts: {
   }
 
   if (pendingAgentMessageIds.length > 0) {
-    await awaitAgentMessageDispatches(pendingAgentMessageIds, (update) => {
+    await awaitAgentMessageDispatches(
+      pendingAgentMessageIds,
+      (update) => {
       const chipStatus =
         update.status === "done"
           ? "ran"
@@ -958,7 +977,9 @@ export async function generateAssistantReply(opts: {
           detail: entry.detail,
         });
       }
-    });
+    },
+      getAgentMessageSenderWaitTimeoutMs()
+    );
   }
 
   const hintIds = Array.from(
@@ -971,4 +992,9 @@ export async function generateAssistantReply(opts: {
     toolHints: hintIds,
     provider: "openrouter",
   };
+  } finally {
+    if (opts.senderThreadId) {
+      await flushDeferredAgentThreadPosts(opts.senderThreadId);
+    }
+  }
 }

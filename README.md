@@ -95,7 +95,17 @@ With an OpenRouter key configured, open a chat with **Theo Rios** (graphic desig
 
 > Ask Mara to review the API shape for the hero section.
 
-Theo should call `message_agent`, you will see an **Agent handoff** chip (`→ Mara Chen (senior-developer): …`) while Mara answers in her own persona, then Theo summarizes for you. Handoffs are **one hop only** — nested agents cannot chain further `message_agent` calls. Seeded personas are refreshed automatically on server start; run `npm run db:seed` manually if you want to force an upsert.
+Theo should call `message_agent` (async by default). You will see an **Agent handoff** chip progress (`queued` → `running` → reply) while Mara answers in her own persona; a **Colleague reply** line may appear in the thread with her answer, then Theo summarizes for you. Use `wait: true` on the tool call for the legacy behaviour that blocks until the other agent replies inline. Multi-hop chains are capped by `ATRIUM_AGENT_MESSAGE_MAX_HOPS` (default 3). After upgrading, run `npm run db:push` so the `AgentMessage` inbox table exists.
+
+Environment knobs (optional):
+
+- `ATRIUM_AGENT_MESSAGE_MAX_HOPS` — max messages per handoff chain (default `3`)
+- `ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE` — outbound messages per agent per minute (default `20`)
+- `ATRIUM_AGENT_MESSAGE_TIMEOUT_MS` — receiver run timeout (default `120000`)
+- `ATRIUM_AGENT_MESSAGE_SENDER_WAIT_MS` — how long your chat request waits for async handoffs (defaults to the dispatch timeout)
+- `ATRIUM_AGENT_MESSAGE_MAX_CONCURRENT` — parallel receiver dispatches in one server process (default `3`)
+
+Seeded personas are refreshed automatically on server start; run `npm run db:seed` manually if you want to force an upsert.
 
 ### 45-second demo
 

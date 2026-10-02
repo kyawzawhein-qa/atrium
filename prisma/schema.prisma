@@ -76,6 +76,8 @@ model AgentMessage {
   threadId        String
   parentMessageId String?
   hopCount        Int      @default(1)
+  /// JSON array of agent slugs on the chain path at send time (cycle detection).
+  chainSlugsJson  String   @default("[]")
   body            String
   /// JSON array placeholder for phase-2 attachments.
   attachments     String   @default("[]")
@@ -83,6 +85,8 @@ model AgentMessage {
   error           String?
   /// Reply text when status is done (also copied to sender thread as agent_reply).
   reply           String?
+  /// JSON ToolLogEntry[] from the receiver run (fs writes/edits surfaced to sender).
+  receiverToolLog String?
   /// Sender chat thread to append agent_reply / tool updates.
   senderThreadId  String?
   senderToolLogId String?

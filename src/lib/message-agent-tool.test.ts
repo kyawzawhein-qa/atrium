@@ -12,8 +12,8 @@ import { getToolDefinitionNames } from "./llm";
 
 const testDb = createTestDb();
 
-after(() => {
-  testDb.cleanup();
+after(async () => {
+  await testDb.cleanup();
 });
 
 async function seedAgents() {
@@ -65,7 +65,7 @@ before(async () => {
 
 test("happy path: brief is delivered to target agent voice", async () => {
   let captured: { targetSlug: string; brief: string } | null = null;
-  const runBrief: RunAgentBrief = async (target, brief, _chain) => {
+  const runBrief: RunAgentBrief = async (target, brief) => {
     captured = { targetSlug: target.slug, brief };
     return { content: "Beta says: use more whitespace." };
   };
@@ -91,7 +91,7 @@ test("happy path: brief is delivered to target agent voice", async () => {
 
 test("Theo → Mara handoff resolves first names and slugs", async () => {
   let targetSlug = "";
-  const runBrief: RunAgentBrief = async (target, _brief, _chain) => {
+  const runBrief: RunAgentBrief = async (target) => {
     targetSlug = target.slug;
     return { content: "Mara says: ship the API first." };
   };
@@ -161,23 +161,29 @@ test("messageAgentPendingDetail shows target while nested run is in flight", asy
   assert.match(detail, /→ Mara Chen \(senior-developer\): consulting/);
 });
 
-test("receiver tool grants stay separate from caller (no grant inheritance)", () => {
+test("receiver tool surface follows studio grants, not caller tool list", () => {
   const callerTools = getToolDefinitionNames({
     fsGranted: false,
     shellGranted: false,
     messageAgentEnabled: true,
   });
-  assert.ok(callerTools.includes("message_agent"));
-  assert.ok(!callerTools.includes("read_file"));
+  assert.deepEqual(callerTools, ["message_agent"]);
 
-  const calleeTools = getToolDefinitionNames({
+  const receiverWithoutFs = getToolDefinitionNames({
+    fsGranted: false,
+    shellGranted: false,
+    messageAgentEnabled: true,
+  });
+  assert.deepEqual(receiverWithoutFs, ["message_agent"]);
+
+  const receiverWithFs = getToolDefinitionNames({
     fsGranted: true,
     shellGranted: true,
     messageAgentEnabled: true,
   });
-  assert.ok(calleeTools.includes("message_agent"));
-  assert.ok(calleeTools.includes("read_file"));
-  assert.ok(calleeTools.includes("run_shell"));
+  assert.ok(receiverWithFs.includes("read_file"));
+  assert.ok(receiverWithFs.includes("write_file"));
+  assert.ok(!callerTools.includes("write_file"));
 });
 
 test("message_agent is available without filesystem grants", () => {

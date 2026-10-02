@@ -10,7 +10,6 @@ import {
   waitForAgentMessageDispatch,
   setAgentMessageReceiverRunnerForTests,
   drainAgentMessageDispatcherForTests,
-  resetAgentMessageDispatcherForTests,
   runAgentMessageRecoverySweepForTests,
 } from "./agent-message-dispatcher";
 import { prisma } from "./prisma";
@@ -18,9 +17,7 @@ import { prisma } from "./prisma";
 const testDb = createTestDb();
 
 after(async () => {
-  await drainAgentMessageDispatcherForTests();
-  await resetAgentMessageDispatcherForTests();
-  testDb.cleanup();
+  await testDb.cleanup();
 });
 
 before(async () => {
@@ -55,6 +52,7 @@ const fromA = { name: "Agent Alpha", slug: "agent-a", description: "A" };
 
 test("async enqueue returns messageId and dispatch completes with agent_reply", async () => {
   setAgentMessageReceiverRunnerForTests(async () => ({ content: "Async reply body" }));
+  try {
   const thread = await prisma.thread.create({
     data: {
       title: "t",
@@ -86,7 +84,9 @@ test("async enqueue returns messageId and dispatch completes with agent_reply", 
   });
   assert.equal(replies.length, 1);
   assert.match(replies[0].content, /Agent Beta/);
-  setAgentMessageReceiverRunnerForTests(null);
+  } finally {
+    setAgentMessageReceiverRunnerForTests(null);
+  }
 });
 
 test("wait:true preserves synchronous reply shape", async () => {
@@ -217,6 +217,15 @@ test("A→B→C chain within hop limit (wait:true top)", async () => {
 });
 
 test("hop 4 refused and A→B→A cycle refused", async () => {
+  await prisma.agent.create({
+    data: {
+      slug: "agent-d",
+      name: "Agent Delta",
+      description: "D",
+      modelId: "openai/gpt-4o-mini",
+      modelName: "Mini",
+    },
+  });
   const noop: RunAgentBrief = async () => ({ content: "x" });
   const deepChain: AgentMessageChainContext = {
     threadId: "t",
@@ -224,7 +233,7 @@ test("hop 4 refused and A→B→A cycle refused", async () => {
     chainSlugs: ["agent-a", "agent-b", "agent-c"],
   };
   const hop4 = await executeMessageAgent(
-    { agent: "agent-c", brief: "too deep" },
+    { agent: "agent-d", brief: "too deep" },
     { fromAgent: fromA, chain: deepChain },
     noop
   );
@@ -253,6 +262,7 @@ test("dispatch failure sets status failed and agent_reply error", async () => {
   setAgentMessageReceiverRunnerForTests(async () => {
     throw new Error("receiver exploded");
   });
+  try {
   const thread = await prisma.thread.create({
     data: {
       title: "fail",
@@ -275,7 +285,9 @@ test("dispatch failure sets status failed and agent_reply error", async () => {
 
   const replies = await prisma.message.findMany({ where: { threadId: thread.id } });
   assert.ok(replies.some((m) => m.role === "agent_reply" && m.content.includes("failed")));
-  setAgentMessageReceiverRunnerForTests(null);
+  } finally {
+    setAgentMessageReceiverRunnerForTests(null);
+  }
 });
 
 test("dispatch timeout fails quickly and marks row failed", async () => {
@@ -295,7 +307,7 @@ test("dispatch timeout fails quickly and marks row failed", async () => {
     });
     return { content: "too late" };
   });
-
+  try {
   const result = await executeMessageAgent(
     { agent: "agent-b", brief: "slow" },
     { fromAgent: fromA },
@@ -309,8 +321,11 @@ test("dispatch timeout fails quickly and marks row failed", async () => {
   const row = await prisma.agentMessage.findUniqueOrThrow({ where: { id: result.messageId } });
   assert.equal(row.status, "failed");
   assert.match(row.error ?? "", /timed out/i);
-  process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS = prev;
-  setAgentMessageReceiverRunnerForTests(null);
+  } finally {
+    if (prev === undefined) delete process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS;
+    else process.env.ATRIUM_AGENT_MESSAGE_TIMEOUT_MS = prev;
+    setAgentMessageReceiverRunnerForTests(null);
+  }
 });
 
 test("recovery sweep re-queues stuck running and notifies stale failures", async () => {
@@ -390,11 +405,96 @@ test("rate limit triggers on async enqueue", async () => {
     noop
   );
 
-  process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE = prev;
-  await drainAgentMessageDispatcherForTests();
+  try {
+    assert.ok(r1.ok && r2.ok);
+    assert.equal(r3.ok, false);
+    if (r3.ok) throw new Error("expected rate limit");
+    assert.equal(r3.code, "rate_limited");
+  } finally {
+    await drainAgentMessageDispatcherForTests();
+    setAgentMessageReceiverRunnerForTests(null);
+    if (prev === undefined) delete process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE;
+    else process.env.ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE = prev;
+  }
+});
 
-  assert.ok(r1.ok && r2.ok);
-  assert.equal(r3.ok, false);
-  if (r3.ok) throw new Error("expected rate limit");
-  assert.equal(r3.code, "rate_limited");
+test("mixed wait then async cannot loop back to prior agent", async () => {
+  const noop: RunAgentBrief = async () => ({ content: "ok" });
+  const first = await executeMessageAgent(
+    { agent: "agent-b", brief: "hop1", wait: true },
+    { fromAgent: fromA },
+    noop
+  );
+  assert.equal(first.ok, true);
+  const row = await prisma.agentMessage.findFirstOrThrow({
+    where: { fromAgentSlug: "agent-a", toAgentSlug: "agent-b" },
+    orderBy: { createdAt: "desc" },
+  });
+  const chain: AgentMessageChainContext = {
+    threadId: row.threadId,
+    hopCount: row.hopCount,
+    chainSlugs: JSON.parse(row.chainSlugsJson) as string[],
+    parentMessageId: row.id,
+  };
+  await executeMessageAgent(
+    { agent: "agent-c", brief: "hop2" },
+    {
+      fromAgent: { name: "B", slug: "agent-b", description: "" },
+      chain,
+      inboundAgentMessageId: row.id,
+    },
+    noop
+  );
+  const cRow = await prisma.agentMessage.findFirstOrThrow({
+    where: { fromAgentSlug: "agent-b", toAgentSlug: "agent-c" },
+    orderBy: { createdAt: "desc" },
+  });
+  const chainC: AgentMessageChainContext = {
+    threadId: cRow.threadId,
+    hopCount: cRow.hopCount,
+    chainSlugs: JSON.parse(cRow.chainSlugsJson) as string[],
+    parentMessageId: cRow.id,
+  };
+  const loop = await executeMessageAgent(
+    { agent: "agent-a", brief: "loop back" },
+    {
+      fromAgent: { name: "C", slug: "agent-c", description: "" },
+      chain: chainC,
+      inboundAgentMessageId: cRow.id,
+    },
+    noop
+  );
+  assert.equal(loop.ok, false);
+  if (loop.ok) throw new Error("expected cycle");
+  assert.equal(loop.code, "cycle");
+});
+
+test("receiver tool log is stored on agent message row", async () => {
+  setAgentMessageReceiverRunnerForTests(async () => ({
+    content: "done",
+    toolLog: [
+      {
+        id: "w1",
+        name: "write_file",
+        status: "ran",
+        detail: "/tmp/demo.txt",
+      },
+    ],
+  }));
+  try {
+    const result = await executeMessageAgent(
+      { agent: "agent-b", brief: "with tools" },
+      { fromAgent: fromA },
+      async () => ({ content: "unused" })
+    );
+    assert.ok(result.ok && "messageId" in result);
+    await waitForAgentMessageDispatch(result.messageId);
+    const row = await prisma.agentMessage.findUniqueOrThrow({
+      where: { id: result.messageId },
+    });
+    assert.match(row.receiverToolLog ?? "", /write_file/);
+    assert.match(row.reply ?? "", /Receiver file changes/);
+  } finally {
+    setAgentMessageReceiverRunnerForTests(null);
+  }
 });

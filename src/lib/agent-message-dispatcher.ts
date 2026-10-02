@@ -3,19 +3,24 @@
  */
 
 import { prisma } from "./prisma";
-import { generateAssistantReply } from "./llm";
+import { generateAssistantReply, type ToolLogEntry } from "./llm";
 import {
   agentToVoice,
-  buildChainSlugsForThread,
+  buildChainSlugsForMessageRow,
   type AgentMessageChainContext,
   type RunAgentBrief,
 } from "./message-agent-tool";
-import { getAgentMessageDispatchTimeoutMs, getMaxAgentMessageHops } from "./agent-message-config";
+import {
+  getAgentMessageDispatchTimeoutMs,
+  getAgentMessageMaxConcurrent,
+  getMaxAgentMessageHops,
+} from "./agent-message-config";
 import {
   markAgentMessageFailed,
   notifySenderAgentReplyFailure,
   notifySenderAgentReplySuccess,
 } from "./agent-message-notify";
+import { appendReceiverToolSummary, summarizeReceiverToolLog } from "./receiver-tool-summary";
 
 export type AgentMessageToolStatus = "queued" | "running" | "done" | "failed";
 
@@ -31,6 +36,10 @@ const listeners = new Map<string, Set<AgentMessageStatusListener>>();
 let bootPromise: Promise<void> | null = null;
 let bootDisabledForTests = false;
 let autoDispatchEnabled = true;
+
+let activeDispatches = 0;
+const dispatchWaiters: Array<() => void> = [];
+const activeTimers = new Set<ReturnType<typeof setTimeout>>();
 
 export function disableAgentMessageDispatcherBootForTests(): void {
   bootDisabledForTests = true;
@@ -88,16 +97,37 @@ const defaultReceiverRunner: RunAgentBrief = async (voice, brief, chain, signal)
     inboundAgentMessageId: chain.parentMessageId ?? undefined,
     abortSignal: signal,
   });
-  return { content: reply.content };
+  return { content: reply.content, toolLog: reply.toolLog };
 };
 
-/**
- * On process boot: recover inbox rows after a crash/restart.
- * - Stuck `running` (not stale): reset to `queued` and re-dispatch (retry policy).
- * - Stale `queued`/`running`: mark `failed` and notify sender.
- * - `queued` (fresh): re-dispatch.
- * - `failed` without sender notification: notify sender (idempotent).
- */
+async function acquireDispatchSlot(): Promise<void> {
+  const max = getAgentMessageMaxConcurrent();
+  if (activeDispatches < max) {
+    activeDispatches++;
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    dispatchWaiters.push(resolve);
+  });
+  activeDispatches++;
+}
+
+function releaseDispatchSlot(): void {
+  activeDispatches--;
+  const next = dispatchWaiters.shift();
+  if (next) next();
+}
+
+function trackTimeout(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
+  activeTimers.add(timer);
+  return timer;
+}
+
+function clearTrackedTimeout(timer: ReturnType<typeof setTimeout>): void {
+  clearTimeout(timer);
+  activeTimers.delete(timer);
+}
+
 export async function bootAgentMessageDispatcher(): Promise<void> {
   if (bootDisabledForTests) return;
   if (bootPromise) return bootPromise;
@@ -105,7 +135,6 @@ export async function bootAgentMessageDispatcher(): Promise<void> {
   return bootPromise;
 }
 
-/** Test hook: run recovery sweep without re-dispatching (autoDispatch off). */
 export async function runAgentMessageRecoverySweepForTests(): Promise<void> {
   const prev = autoDispatchEnabled;
   autoDispatchEnabled = false;
@@ -155,9 +184,11 @@ async function runStartupSweep(): Promise<void> {
         where: { id: row.id },
         data: { status: "queued" },
       });
+      toDispatch.push(row.id);
+      continue;
     }
 
-    if (row.status === "queued" || row.status === "running") {
+    if (row.status === "queued") {
       toDispatch.push(row.id);
     }
   }
@@ -196,33 +227,42 @@ export async function waitForAgentMessageDispatch(messageId: string): Promise<vo
 
 export async function drainAgentMessageDispatcherForTests(): Promise<void> {
   await bootAgentMessageDispatcher();
-  while (inFlight.size > 0) {
+  while (inFlight.size > 0 || activeDispatches > 0) {
     await Promise.all([...inFlight.values()]);
+    if (inFlight.size === 0 && activeDispatches > 0 && dispatchWaiters.length === 0) {
+      break;
+    }
   }
 }
 
 export async function resetAgentMessageDispatcherForTests(): Promise<void> {
   await drainAgentMessageDispatcherForTests();
+  for (const timer of activeTimers) {
+    clearTimeout(timer);
+  }
+  activeTimers.clear();
   inFlight.clear();
   listeners.clear();
   testReceiverRunner = null;
   bootPromise = null;
   bootDisabledForTests = true;
   autoDispatchEnabled = true;
+  activeDispatches = 0;
+  dispatchWaiters.length = 0;
 }
 
 async function dispatchAgentMessage(messageId: string): Promise<void> {
-  let row = await prisma.agentMessage.findUnique({ where: { id: messageId } });
-  if (!row || row.status !== "queued") return;
-
+  await acquireDispatchSlot();
   try {
-    await prisma.agentMessage.update({
-      where: { id: messageId },
+    const claimed = await prisma.agentMessage.updateMany({
+      where: { id: messageId, status: "queued" },
       data: { status: "running" },
     });
+    if (claimed.count !== 1) return;
+
     emitStatus(messageId, "running");
 
-    row = await prisma.agentMessage.findUniqueOrThrow({ where: { id: messageId } });
+    const row = await prisma.agentMessage.findUniqueOrThrow({ where: { id: messageId } });
     const target = await prisma.agent.findUnique({ where: { slug: row.toAgentSlug } });
     if (!target) {
       await markAgentMessageFailed(messageId, `Receiver agent "${row.toAgentSlug}" not found.`);
@@ -232,7 +272,7 @@ async function dispatchAgentMessage(messageId: string): Promise<void> {
       return;
     }
 
-    const chainSlugs = await buildChainSlugsForThread(row.threadId);
+    const chainSlugs = await buildChainSlugsForMessageRow(row);
     const chain: AgentMessageChainContext = {
       threadId: row.threadId,
       hopCount: row.hopCount,
@@ -248,41 +288,60 @@ async function dispatchAgentMessage(messageId: string): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     let replyText: string;
+    let receiverToolLog: ToolLogEntry[] = [];
     try {
-      replyText = await Promise.race([
-        runner(voice, row.body, chain, ac.signal).then((r) => r.content),
-        new Promise<string>((_, reject) => {
-          timer = setTimeout(() => {
-            ac.abort(new Error("Agent message timed out"));
-            reject(new Error("Agent message timed out"));
-          }, timeoutMs);
+      const runResult = await Promise.race([
+        runner(voice, row.body, chain, ac.signal),
+        new Promise<never>((_, reject) => {
+          timer = trackTimeout(
+            setTimeout(() => {
+              ac.abort(new Error("Agent message timed out"));
+              reject(new Error("Agent message timed out"));
+            }, timeoutMs)
+          );
         }),
       ]);
+      replyText = runResult.content;
+      receiverToolLog = runResult.toolLog ?? [];
     } catch (err) {
       const message = err instanceof Error ? err.message : "Agent run failed";
       await markAgentMessageFailed(messageId, message.slice(0, 220));
       emitStatus(messageId, "failed", { error: message.slice(0, 220) });
       return;
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) clearTrackedTimeout(timer);
     }
 
-    const trimmed = replyText.trim() || "(empty response)";
+    const trimmed = appendReceiverToolSummary(
+      replyText.trim() || "(empty response)",
+      receiverToolLog
+    );
     await prisma.agentMessage.update({
       where: { id: messageId },
-      data: { status: "done", reply: trimmed, error: null },
+      data: {
+        status: "done",
+        reply: trimmed,
+        error: null,
+        receiverToolLog:
+          receiverToolLog.length > 0 ? JSON.stringify(receiverToolLog) : null,
+      },
     });
 
     const fresh = await prisma.agentMessage.findUniqueOrThrow({ where: { id: messageId } });
     await notifySenderAgentReplySuccess(fresh, target.name, target.slug, trimmed);
 
-    const detail = `→ ${target.name} (${target.slug}): ${preview(trimmed)}`;
+    const toolNote = summarizeReceiverToolLog(receiverToolLog);
+    const detail = toolNote
+      ? `→ ${target.name} (${target.slug}): ${preview(trimmed)} · ${toolNote}`
+      : `→ ${target.name} (${target.slug}): ${preview(trimmed)}`;
     emitStatus(messageId, "done", { detail });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Dispatch failed";
     console.error("[agent-message-dispatcher]", messageId, err);
     await markAgentMessageFailed(messageId, message.slice(0, 220));
     emitStatus(messageId, "failed", { error: message.slice(0, 220) });
+  } finally {
+    releaseDispatchSlot();
   }
 }
 
@@ -290,7 +349,6 @@ function preview(text: string): string {
   return text.length > 120 ? text.slice(0, 117) + "…" : text;
 }
 
-/** Await queued dispatches started during this assistant generation (for SSE tool updates). */
 export async function awaitAgentMessageDispatches(
   messageIds: string[],
   onUpdate?: AgentMessageStatusListener,
