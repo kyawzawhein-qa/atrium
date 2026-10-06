@@ -183,6 +183,6 @@ test("buildDemoPrompts uses platform shell listing command", () => {
   assert.match(prompts.shell, new RegExp(list.command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
-test.after(() => {
-  testDb.cleanup();
+test.after(async () => {
+  await testDb.cleanup();
 });

@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  /* instrumentation.ts runs at server boot (Next.js App Router) */
 };
 
 export default nextConfig;

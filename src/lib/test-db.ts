@@ -1,9 +1,17 @@
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  disableAgentMessageDispatcherBootForTests,
+  drainAgentMessageDispatcherForTests,
+  resetAgentMessageDispatcherForTests,
+} from "./agent-message-dispatcher";
+
+disableAgentMessageDispatcherBootForTests();
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -13,20 +21,20 @@ const projectRoot = path.resolve(
 export type TestDb = {
   dir: string;
   url: string;
-  cleanup: () => void;
+  cleanup: () => Promise<void>;
 };
 
-function resetPrismaSingleton(): void {
+async function resetPrismaSingleton(): Promise<void> {
   const globalForPrisma = globalThis as { prisma?: PrismaClient };
-  void globalForPrisma.prisma?.$disconnect();
+  await globalForPrisma.prisma?.$disconnect();
   delete globalForPrisma.prisma;
 }
 
 /** Ephemeral SQLite database with current Prisma schema (for unit tests). */
 export function createTestDb(): TestDb {
-  resetPrismaSingleton();
+  void resetPrismaSingleton();
   const dir = mkdtempSync(path.join(os.tmpdir(), "atrium-test-"));
-  const dbPath = path.join(dir, "test.db");
+  const dbPath = path.join(dir, `test-${randomUUID()}.db`);
   const url = `file:${dbPath}`;
   process.env.DATABASE_URL = url;
   execSync("npx prisma db push --skip-generate", {
@@ -37,9 +45,11 @@ export function createTestDb(): TestDb {
   return {
     dir,
     url,
-    cleanup: () => {
-      resetPrismaSingleton();
-      rmSync(dir, { recursive: true, force: true });
+    cleanup: async () => {
+      await drainAgentMessageDispatcherForTests();
+      await resetAgentMessageDispatcherForTests();
+      await resetPrismaSingleton();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
     },
   };
 }

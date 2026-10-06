@@ -8,10 +8,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   generateAssistantReply,
-  type ChatMessage,
   type StreamEvent,
   type ToolLogEntry,
 } from "@/lib/llm";
+import { mapThreadMessagesToChatHistory } from "@/lib/thread-history";
+import { flushDeferredAgentThreadPosts } from "@/lib/agent-message-notify";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     where: { id },
     include: {
       agent: true,
-      messages: { orderBy: { createdAt: "asc" }, take: 40 },
+      messages: { orderBy: { createdAt: "desc" }, take: 40 },
     },
   });
   if (!thread) {
@@ -58,10 +59,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     },
   });
 
-  const history: ChatMessage[] = thread.messages.map((m) => ({
-    role: m.role as "user" | "assistant" | "system",
-    content: m.content,
-  }));
+  const history = mapThreadMessagesToChatHistory(
+    [...thread.messages].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+    )
+  );
 
   const agentVoice = {
     name: thread.agent.name,
@@ -90,6 +92,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             history,
             userText: content,
             streamTokens: true,
+            senderThreadId: thread.id,
             onEvent: send,
           });
 
@@ -126,6 +129,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             },
           });
 
+          await flushDeferredAgentThreadPosts(thread.id);
           send({
             type: "done",
             messageId: assistantMessage.id,
@@ -142,6 +146,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             },
           });
           send({ type: "error", message });
+          await flushDeferredAgentThreadPosts(thread.id);
           send({
             type: "done",
             messageId: assistantMessage.id,
@@ -170,6 +175,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       agent: agentVoice,
       history,
       userText: content,
+      senderThreadId: thread.id,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "LLM error";
@@ -180,6 +186,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         content: `I hit a provider error: ${message}. Check Settings → OpenRouter key and this agent's model.`,
       },
     });
+    await flushDeferredAgentThreadPosts(thread.id);
     const refreshed = await prisma.thread.findUnique({
       where: { id },
       include: {
@@ -211,6 +218,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ...(titleUpdate ? { title: titleUpdate } : {}),
     },
   });
+
+  await flushDeferredAgentThreadPosts(thread.id);
 
   const refreshed = await prisma.thread.findUnique({
     where: { id },

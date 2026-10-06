@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Async agent inbox: `message_agent` queues by default (`{ ok, queued, messageId }`); `wait: true` preserves the synchronous `{ ok, agent, slug, reply }` shape.
+- `AgentMessage` table (apply with `npm run db:push` after upgrade). Config: `ATRIUM_AGENT_MESSAGE_MAX_HOPS`, `ATRIUM_AGENT_MESSAGE_RATE_PER_MINUTE`, `ATRIUM_AGENT_MESSAGE_TIMEOUT_MS`, `ATRIUM_AGENT_MESSAGE_SENDER_WAIT_MS`, `ATRIUM_AGENT_MESSAGE_MAX_CONCURRENT`.
 - Inter-agent orchestration via `message_agent`: one agent consults another by slug or name (e.g. Theo → Mara), with a visible **Agent handoff** chip in chat (`→ Name (slug): preview`).
 - Collaboration intent detection forces `message_agent` on named specialist handoffs; retry when the model wrongly refuses.
 - Runtime seed upsert (`ensureSeedAgents`) so existing local DBs pick up persona text that mentions `message_agent` without a manual reseed.
@@ -19,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `message_agent` resolves first names, titles, and slug aliases (e.g. `Mara`, `graphic designer`) with clear errors when lookup fails.
-- Handoff chips stream a `running` state immediately, then update when the nested agent replies.
+- Handoff chips show `queued` / `running` / reply states; colleague replies render in a distinct **Colleague reply** bubble after the assistant turn completes.
 - Local-first: no login / password gate. `/` redirects to `/chat`. OpenRouter-only (no local-model download).
 - Windows allowlist matching is case-insensitive.
 - Public open-source polish: README, license, contributing guides, CI, and brand assets.
