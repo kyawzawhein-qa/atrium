@@ -32,7 +32,7 @@ Atrium is a calm, self-hosted multi-agent chat studio by [Kyaw Zaw Hein](https:/
 - **Streaming chat** (SSE: tokens + tool chips as they arrive)
 - **Path allowlist** for absolute paths (`list_dir`, `read_file`, `write_file`, `edit_file`)
 - **Optional shell** — Settings toggle “Allow shell in granted folders”; every command needs approval
-- **Agent handoffs** — `message_agent` lets one specialist consult another (1-hop; visible handoff chip in chat)
+- **Agent handoffs** — `message_agent` lets one specialist consult another (async inbox by default; visible handoff chip; multi-hop cap via `ATRIUM_AGENT_MESSAGE_MAX_HOPS`, default 3)
 - **Local SQLite** via Prisma (settings, agents, threads, messages)
 
 ## Quick start
@@ -130,6 +130,9 @@ flowchart LR
   App --> SQLite[(Prisma / SQLite)]
   App -->|streaming chat completions| OpenRouter["OpenRouter API"]
   App -->|list_dir / read_file / write_file / edit_file / run_shell| FS["Server filesystem + shell\n(allowlist + approval)"]
+  App -->|message_agent| Inbox["AgentMessage inbox + dispatch"]
+  Inbox --> SQLite
+  Inbox -->|receiver agent run| OpenRouter
 ```
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
