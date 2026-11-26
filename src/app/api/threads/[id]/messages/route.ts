@@ -60,9 +60,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   });
 
   const history = mapThreadMessagesToChatHistory(
-    [...thread.messages].sort(
-      (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
-    )
+    [...thread.messages]
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        createdAt: m.createdAt,
+      }))
   );
 
   const agentVoice = {

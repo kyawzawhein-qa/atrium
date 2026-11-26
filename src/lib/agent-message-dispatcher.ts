@@ -110,6 +110,7 @@ const defaultReceiverRunner: RunAgentBrief = async (voice, brief, chain, signal)
     messageAgentEnabled: chain.hopCount < getMaxAgentMessageHops(),
     agentMessageChain: chain,
     inboundAgentMessageId: chain.parentMessageId ?? undefined,
+    inboundBriefRecalledAt: new Date().toISOString(),
     abortSignal: signal,
   });
   return { content: reply.content, toolLog: reply.toolLog };

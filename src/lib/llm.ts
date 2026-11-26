@@ -31,6 +31,7 @@ import { getStudioSettings } from "./settings";
 import { OPENROUTER_BASE, openRouterHeaders } from "./openrouter";
 import { ensurePluginsLoaded, getPluginContext } from "./plugins/init";
 import { executePluginTool } from "./plugins/registry";
+import { withUntrustedStoragePolicy, wrapUntrusted } from "./untrusted";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -251,7 +252,7 @@ function detectFsIntent(text: string): "write" | "edit" | "read" | "list" | null
   return null;
 }
 
-function buildSystemPrompt(
+export function buildSystemPrompt(
   agent: AgentVoice,
   toolsGranted: boolean,
   shellGranted: boolean,
@@ -293,7 +294,7 @@ function buildSystemPrompt(
       .filter(Boolean)
       .join(" ");
   }
-  return [
+  const base = [
     persona,
     "",
     `Your name is ${agent.name}. Stay in this persona. Do not impersonate other agents.`,
@@ -302,6 +303,7 @@ function buildSystemPrompt(
   ]
     .filter(Boolean)
     .join("\n");
+  return withUntrustedStoragePolicy(base);
 }
 
 function buildOfflineReply(agent: AgentVoice, userText: string): string {
@@ -667,6 +669,8 @@ export async function generateAssistantReply(opts: {
   messageAgentEnabled?: boolean;
   agentMessageChain?: AgentMessageChainContext;
   inboundAgentMessageId?: string;
+  /** ISO timestamp when userText was loaded from storage (inbound agent brief). */
+  inboundBriefRecalledAt?: string;
   senderThreadId?: string;
   abortSignal?: AbortSignal;
 }): Promise<LlmResult> {
@@ -713,13 +717,22 @@ export async function generateAssistantReply(opts: {
     messageAgentEnabled,
   });
 
+  const liveUserContent =
+    opts.inboundAgentMessageId !== undefined
+      ? wrapUntrusted({
+          content: opts.userText,
+          source: "memory:agent_message_brief",
+          timestamp: opts.inboundBriefRecalledAt,
+        })
+      : opts.userText;
+
   type OrMsg = Record<string, unknown>;
   const messages: OrMsg[] = [
     { role: "system", content: system },
     ...opts.history
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ role: m.role, content: m.content })),
-    { role: "user", content: opts.userText },
+    { role: "user", content: liveUserContent },
   ];
 
   const toolLog: ToolLogEntry[] = [];
